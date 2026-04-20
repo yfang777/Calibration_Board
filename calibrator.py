@@ -183,6 +183,7 @@ class Calibrator:
                 ).mean()
 
                 print("Reprojection Error:", error)
+                print("charuco_corners:", len(charuco_corners))
 
                 # Threshold check
                 if error > 0.3 or len(charuco_corners) < 35:
@@ -195,7 +196,12 @@ class Calibrator:
             # rvec from solvePnP is typically board->cam
             R_board2cam = cv2.Rodrigues(rvec)[0]
             t_board2cam = tvec[:, 0]
-            
+
+            # Redefine world frame as Rx(180°) relative to the board's native frame
+            # (flip Y-Z). Right-multiply rotation; translation is unchanged (shared origin).
+            Rx180 = np.diag([1.0, -1.0, -1.0])
+            R_board2cam = R_board2cam @ Rx180
+
             # Construct Extrinsic Matrix
             extrinsic = np.eye(4)
             extrinsic[:3, :3] = R_board2cam
@@ -223,9 +229,16 @@ class Calibrator:
                     
                 cv2.imwrite(f'{self.vis_dir}/calibration_detected_marker_{serial_number}.jpg', vis_markers)
 
-                axes_img = color_bgr.copy()
-                cv2.drawFrameAxes(axes_img, intrinsic, dist_coef, rvec, tvec, 0.1)
-                cv2.imwrite(f"{self.vis_dir}/calibration_result_{serial_number}.jpg", axes_img)
+                # Original board frame (pre-flip): uses raw rvec/tvec from solvePnP.
+                axes_original = color_bgr.copy()
+                cv2.drawFrameAxes(axes_original, intrinsic, dist_coef, rvec, tvec, 0.1)
+                cv2.imwrite(f"{self.vis_dir}/world_frame_original_{serial_number}.png", axes_original)
+
+                # Converted world frame (post-flip): derive rvec from flipped R_board2cam.
+                rvec_converted, _ = cv2.Rodrigues(R_board2cam)
+                axes_converted = color_bgr.copy()
+                cv2.drawFrameAxes(axes_converted, intrinsic, dist_coef, rvec_converted, tvec, 0.1)
+                cv2.imwrite(f"{self.vis_dir}/world_frame_converted_{serial_number}.png", axes_converted)
 
         with open(f'{self.calibrate_result_dir}/cam_params.pkl', "wb") as f:
             print("camera_params:", camera_params)
