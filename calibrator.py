@@ -15,7 +15,7 @@ class Calibrator:
 
         # Output dirs
         self.vis_dir = "./data/calibration_vis"
-        self.calibrate_result_dir = "./assets/calib_params"
+        self.calibrate_result_dir = "./data/calib_params"
         os.makedirs(self.vis_dir, exist_ok=True)
         os.makedirs(self.calibrate_result_dir, exist_ok=True)
 
@@ -248,7 +248,7 @@ def main():
     calib = Calibrator()
     calib.calibrate()
     
-    with open("./assets/calib_params/cam_params.pkl", "rb") as f:
+    with open("./data/calib_params/cam_params.pkl", "rb") as f:
         camera_params = pickle.load(f)
 
 if __name__ == "__main__":

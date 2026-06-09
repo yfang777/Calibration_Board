@@ -134,3 +134,7 @@ cython_debug/
 .vscode/
 .idea/
 *.swp
+
+# Local generated/project state
+data/
+.claude/
