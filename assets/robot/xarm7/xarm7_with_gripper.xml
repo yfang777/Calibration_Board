@@ -127,13 +127,7 @@
                     <joint name="joint7" class="size3"/>
                     <geom material="gray" mesh="end_tool" name="end_tool"/>
                     <body name="xarm_gripper_base_link" quat="0 0 0 1">
-                      <!-- original 0.172 -->
-                      <camera name="wrist_camera"
-                              pos="-0.05 0 0.075"
-                              focal="1 1"
-                              resolution="640 480"
-                              sensorsize="1 1"
-                              xyaxes="  0. -1.  0. -0.9723873   0.          0.23337295"/>
+
                       <!-- <site name="link_1" pos="-0.05 0 0.075" rgba="1 0 0 1" size="0.01" type="sphere"/>
                       <site name="link_2" pos="-0.02 0 0.2" rgba="1 0 0 1" size="0.01" type="sphere"/> -->
                       <site name="link_tcp" pos="0 0 .152" quat="0. -0.70710678  0. -0.70710678" rgba="0 0 0 0" size="0.001" type="sphere"/>

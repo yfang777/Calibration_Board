@@ -9,28 +9,69 @@ For each rs_id in cam_params.pkl:
 
 import os
 import pickle
+import time
 from pathlib import Path
 
 import cv2
-import matplotlib.pyplot as plt
 import mujoco
 import numpy as np
+import pyrealsense2 as rs
 import pyvista as pv
+import yaml
 
 from digital_twin_camera import utils
 from digital_twin_camera.robot_env import Xarm7Env
 
 REPO = Path(__file__).resolve().parent.parent
+CONFIG_PATH = REPO / "config.yaml"
 CAM_PARAMS_PATH = REPO / "data/calib_params/cam_params.pkl"
 MJ_XML_DIR = REPO / "assets/mujoco_xml"
 CAMERA_XML = MJ_XML_DIR / "camera.xml"
 SCENE_XML = MJ_XML_DIR / "scene.xml"
+DEFAULT_ROBOT_XML = REPO / "assets/robot/xarm7/xarm7_with_gripper.xml"
+WRIST_ROBOT_XML = REPO / "assets/robot/xarm7/xarm7_with_wrist.xml"
 
 W, H = 640, 480
+FPS = 30
+WRIST_CAMERA_NAME = "wrist_camera"
 
 # Charuco board parameters (must match calibrator.py)
 BOARD_SIZE = (12, 9)   # (cols, rows) — number of squares
 BOARD_SQUARE = 0.03    # square edge length in meters
+
+
+def load_camera_serials() -> tuple[list[str], str]:
+    with CONFIG_PATH.open("r", encoding="utf-8") as f:
+        config = yaml.safe_load(f)
+
+    fixed_rs_ids = [str(rs_id) for rs_id in config["rs_id"]["d455"].values()]
+    wrist_rs_id = str(config["rs_id"]["d405"]["cam_1"])
+    return fixed_rs_ids, wrist_rs_id
+
+
+def connected_realsense_ids() -> set[str]:
+    context = rs.context()
+    return {
+        device.get_info(rs.camera_info.serial_number)
+        for device in context.query_devices()
+    }
+
+
+def assert_realsense_connected(rs_ids: list[str]) -> None:
+    connected_rs_ids = connected_realsense_ids()
+    for rs_id in rs_ids:
+        assert rs_id in connected_rs_ids, (
+            f"RealSense {rs_id} is not connected. "
+            f"Connected serials: {sorted(connected_rs_ids)}"
+        )
+
+
+def select_robot_xml(wrist_rs_id: str, connected_rs_ids: set[str] | None = None) -> tuple[Path, bool]:
+    if connected_rs_ids is None:
+        connected_rs_ids = connected_realsense_ids()
+    use_wrist_robot = wrist_rs_id in connected_rs_ids
+    robot_xml = WRIST_ROBOT_XML if use_wrist_robot else DEFAULT_ROBOT_XML
+    return robot_xml, use_wrist_robot
 
 
 # --- camera conversion ---------------------------------------------------
@@ -77,7 +118,7 @@ def convert_to_mj_camera(extrinsic: np.ndarray, intrinsic: np.ndarray,
            f'  pos="{float(t_c2w[0]):.8f} {float(t_c2w[1]):.8f} {float(t_c2w[2]):.8f}"\n'
            f'  mode="fixed"\n'
            f'  resolution="{w} {h}" sensorsize="{sx} {sy}"\n'
-           f'  focal="{fx_mj} {fy_mj}" \n'
+           f'  focal="{fx_mj} {fy_mj}"\n'
            f'  xyaxes="{x_axis[0]:.8f} {x_axis[1]:.8f} {x_axis[2]:.8f}  '
            f'{y_axis[0]:.8f} {y_axis[1]:.8f} {y_axis[2]:.8f}"/>')
 
@@ -100,6 +141,12 @@ def get_mj_cam(model, data, camera_name, width, height):
           * model.cam_resolution[camera_id][0])
     fy = (model.cam_intrinsic[camera_id][1] / model.cam_sensorsize[camera_id][1]
           * model.cam_resolution[camera_id][1])
+    # if camera_name == WRIST_CAMERA_NAME:
+    #     principal_x, principal_y = model.cam_intrinsic[camera_id][2:4]
+    #     sensor_width, sensor_height = model.cam_sensorsize[camera_id]
+    #     cx = width / 2 + principal_x / sensor_width * width
+    #     cy = height / 2 - principal_y / sensor_height * height
+    # else:
     cx = (width - 1) / 2
     cy = (height - 1) / 2
     in_mat = np.array([[fx, 0, cx],
@@ -125,8 +172,8 @@ def write_camera_xml(cam_params: dict) -> None:
     )
 
 
-def write_scene_xml(include_robot: bool = True) -> None:
-    robot_rel = os.path.relpath(utils.ROBOT_XML, MJ_XML_DIR)
+def write_scene_xml(include_robot: bool = True, robot_xml: Path = DEFAULT_ROBOT_XML) -> None:
+    robot_rel = os.path.relpath(robot_xml, MJ_XML_DIR)
     cam_rel = CAMERA_XML.name
 
     cols, rows = BOARD_SIZE
@@ -203,6 +250,18 @@ def render_mj(model, data, camera_name: str) -> tuple[np.ndarray, np.ndarray]:
     return rgb_bgr, depth
 
 
+def render_mj_rgb(model, data, camera_name: str) -> np.ndarray:
+    """Returns the named camera's RGB render as a BGR image."""
+    renderer = mujoco.Renderer(model, height=H, width=W)
+    try:
+        renderer.update_scene(data, camera=camera_name)
+        rgb = renderer.render()  # RGB uint8
+        rgb_bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+    finally:
+        renderer.close()
+    return rgb_bgr
+
+
 def warp_image(rgb_rs: np.ndarray, K_rs: np.ndarray, K_mj: np.ndarray,
                size: tuple[int, int] = (W, H)) -> np.ndarray:
     """Warp a RealSense image into the MuJoCo camera's intrinsic frame via H = K_mj @ K_rs^{-1}."""
@@ -213,14 +272,89 @@ def warp_image(rgb_rs: np.ndarray, K_rs: np.ndarray, K_mj: np.ndarray,
 _apply_warp = warp_image  # alias so test_mujoco_rgb can use it even when shadowed by an arg name
 
 
+def _resize_like(image: np.ndarray, reference: np.ndarray) -> np.ndarray:
+    """Resize image to reference HxW if needed."""
+    ref_h, ref_w = reference.shape[:2]
+    if image.shape[:2] == (ref_h, ref_w):
+        return image
+    return cv2.resize(image, (ref_w, ref_h), interpolation=cv2.INTER_LINEAR)
+
+
+class RealSenseRgbCameras:
+    """Same-process RealSense RGB capture for the live RGB alignment view."""
+
+    def __init__(self, rs_ids, wrist_rs_id, frame_timeout_ms=15000):
+        self.rs_ids = list(rs_ids)
+        self.wrist_rs_id = wrist_rs_id
+        self.frame_timeout_ms = frame_timeout_ms
+        self.pipes: dict[str, rs.pipeline] = {}
+        self.intrinsics: dict[str, np.ndarray] = {}
+        self.color_formats: dict[str, rs.format] = {}
+
+    def start(self):
+        assert_realsense_connected(self.rs_ids)
+
+        try:
+            for rs_id in self.rs_ids:
+                if rs_id == self.wrist_rs_id:
+                    color_format = rs.format.rgb8
+                else:
+                    color_format = rs.format.bgr8
+
+                pipe = rs.pipeline()
+                cfg = rs.config()
+                cfg.enable_device(rs_id)
+                cfg.enable_stream(rs.stream.color, W, H, color_format, FPS)
+                profile = pipe.start(cfg)
+                self.pipes[rs_id] = pipe
+                stream = profile.get_stream(rs.stream.color).as_video_stream_profile()
+                intr = stream.get_intrinsics()
+                intrinsic = np.array(
+                    [[intr.fx, 0.0, intr.ppx], [0.0, intr.fy, intr.ppy], [0.0, 0.0, 1.0]],
+                    dtype=np.float64,
+                )
+
+                self.intrinsics[rs_id] = intrinsic
+                self.color_formats[rs_id] = color_format
+
+            for _ in range(5):
+                self.get_rgb()
+        except Exception:
+            self.close()
+            raise
+        return self
+
+    def get_rgb(self) -> dict[str, np.ndarray]:
+        images = {}
+        for rs_id in self.rs_ids:
+            frames = self.pipes[rs_id].wait_for_frames(self.frame_timeout_ms)
+            color_frame = frames.get_color_frame()
+            if not color_frame:
+                raise RuntimeError(f"No color frame from RealSense {rs_id}")
+            color = np.asanyarray(color_frame.get_data())
+            if self.color_formats[rs_id] == rs.format.rgb8:
+                color = cv2.cvtColor(color, cv2.COLOR_RGB2BGR)
+            images[rs_id] = color.copy()
+        return images
+
+    def close(self):
+        for pipe in self.pipes.values():
+            pipe.stop()
+        self.pipes.clear()
+        self.intrinsics.clear()
+        self.color_formats.clear()
+
+
 # --- main ----------------------------------------------------------------
 
 def main():
     with open(CAM_PARAMS_PATH, "rb") as f:
         cam_params = pickle.load(f)
 
+    _, wrist_rs_id = load_camera_serials()
+    robot_xml, _ = select_robot_xml(wrist_rs_id)
     write_camera_xml(cam_params)
-    write_scene_xml()
+    write_scene_xml(robot_xml=robot_xml)
 
     model = mujoco.MjModel.from_xml_path(str(SCENE_XML))
     data = mujoco.MjData(model)
@@ -269,62 +403,97 @@ def main():
 # --- tests ---------------------------------------------------------------
 
 def test_mujoco_rgb(include_robot: bool = True, warp_image: bool = True):
-    """Render MuJoCo RGB, capture RealSense RGB, and show a 3xN grid:
-       row 0 = sim, row 1 = real, row 2 = overlay.
+    """Render MuJoCo RGB, capture RealSense RGB, and show an N x 3 grid:
+       columns = sim | real | overlay, rows = scene cameras.
 
     If warp_image is True, warp the RealSense image into the MuJoCo intrinsic frame
     via H = K_mj @ K_rs^{-1} before overlaying.
 
-    Requires at least 2 cameras in cam_params.pkl; raises otherwise.
+    Fixed D455 cameras use names of the form camera_<realsense_serial>.
+    The robot-mounted D405 uses the MuJoCo camera name wrist_camera and the
+    D405 serial configured in config.yaml.
     """
-    with open(CAM_PARAMS_PATH, "rb") as f:
-        cam_params = pickle.load(f)
-
-
-    write_camera_xml(cam_params)
-    write_scene_xml(include_robot=include_robot)
+    fixed_rs_ids, wrist_rs_id = load_camera_serials()
+    robot_xml, use_wrist_robot = select_robot_xml(wrist_rs_id)
+    write_scene_xml(include_robot=include_robot, robot_xml=robot_xml)
+    print(f"Using robot model: {robot_xml.name}")
 
     model = mujoco.MjModel.from_xml_path(str(SCENE_XML))
     data = mujoco.MjData(model)
-    if include_robot:
+    if include_robot and model.nq >= len(utils.DEFAULT_JOINT_DEG):
         utils.set_robot_pose(model, data)
     else:
         mujoco.mj_forward(model, data)
 
-    n = len(cam_params)
-    _, axes = plt.subplots(3, n, figsize=(5 * n, 12), squeeze=False)
+    cameras = [(f"camera_{rs_id}", rs_id) for rs_id in fixed_rs_ids]
+    if include_robot and use_wrist_robot:
+        cameras.append((WRIST_CAMERA_NAME, wrist_rs_id))
 
-    for col, (rs_id, _) in enumerate(cam_params.items()):
-        cam_name = f"camera_{rs_id}"
-        mj_rgb_bgr, _ = render_mj(model, data, cam_name)
-        rs_rgb_bgr = utils.get_realsense_rgb(rs_id)
+    for camera_name, _ in cameras:
+        camera_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, camera_name)
+        assert camera_id >= 0, f"MuJoCo camera {camera_name!r} was not found in {SCENE_XML}"
 
-        if warp_image:
-            _, K_mj = get_mj_cam(model, data, cam_name, W, H)
-            K_rs = utils.get_realsense_intrinsic(rs_id)
-            rs_rgb_bgr = _apply_warp(rs_rgb_bgr, K_rs, K_mj)
+    sim_images = {}
+    K_mj_by_rs = {}
+    for camera_name, rs_id in cameras:
+        sim_images[rs_id] = render_mj_rgb(model, data, camera_name)
+        _, K_mj_by_rs[rs_id] = get_mj_cam(model, data, camera_name, W, H)
 
-        mj_rgb = cv2.cvtColor(mj_rgb_bgr, cv2.COLOR_BGR2RGB)
-        rs_rgb = cv2.cvtColor(rs_rgb_bgr, cv2.COLOR_BGR2RGB)
-        overlay = cv2.addWeighted(mj_rgb, 0.5, rs_rgb, 0.5, 0)
+    rs_cameras = RealSenseRgbCameras(
+        [rs_id for _, rs_id in cameras],
+        wrist_rs_id=wrist_rs_id,
+    )
+    window_name = "mujoco rgb sync: sim | real | overlay"
+    target_period = 1.0 / 30.0
+    font = cv2.FONT_HERSHEY_SIMPLEX
 
-        axes[0, col].imshow(mj_rgb)
-        axes[0, col].set_title(f"sim {cam_name}")
-        axes[1, col].imshow(rs_rgb)
-        axes[1, col].set_title(f"real {rs_id}")
-        axes[2, col].imshow(overlay)
-        axes[2, col].set_title(f"overlay {rs_id}")
-        for row in range(3):
-            axes[row, col].axis("off")
+    def label(image: np.ndarray, text: str) -> np.ndarray:
+        out = image.copy()
+        cv2.putText(out, text, (10, 24), font, 0.7, (0, 0, 0), 4, cv2.LINE_AA)
+        cv2.putText(out, text, (10, 24), font, 0.7, (255, 255, 255), 1, cv2.LINE_AA)
+        return out
 
-        print(f"[{rs_id}] sim={mj_rgb.shape} real={rs_rgb.shape}")
+    try:
+        rs_cameras.start()
+        K_real_by_rs = rs_cameras.intrinsics
 
-    utils.shutdown()
-    plt.tight_layout()
-    plt.show()
+        while True:
+            loop_start = time.perf_counter()
+            obs = rs_cameras.get_rgb()
+            rows = []
+
+            for camera_name, rs_id in cameras:
+                sim = sim_images[rs_id]
+                real = obs[rs_id]
+                if warp_image:
+                    real = _apply_warp(real, K_real_by_rs[rs_id], K_mj_by_rs[rs_id], (W, H))
+                else:
+                    real = _resize_like(real, sim)
+                overlay = cv2.addWeighted(sim, 0.5, real, 0.5, 0.0)
+
+                rows.append(
+                    np.hstack([
+                        label(sim, f"{camera_name} sim"),
+                        label(real, f"{camera_name} real ({rs_id})"),
+                        label(overlay, f"{camera_name} overlay"),
+                    ])
+                )
+
+            mosaic = np.vstack(rows)
+            cv2.imshow(window_name, mosaic)
+
+            elapsed = time.perf_counter() - loop_start
+            delay_ms = max(1, int((target_period - elapsed) * 1000))
+            key = cv2.waitKey(delay_ms) & 0xFF
+            if key in (27, ord("q")):
+                break
+    finally:
+        rs_cameras.close()
+        cv2.destroyAllWindows()
 
 
-def test_pointcloud_alignment(warp_image: bool = True):
+
+def test_mujoco_pointcloud(warp_image: bool = True):
     """Sweep through SIM_POSES_DEG: drive the real arm + sim to each pose, lift
     sim and real depth into world-frame point clouds, and overlay them.
 
@@ -337,85 +506,59 @@ def test_pointcloud_alignment(warp_image: bool = True):
 
     Requires at least 2 cameras in cam_params.pkl; raises otherwise.
     """
-
-    SIM_POSES_DEG = [
-        (0.0,  -9.6,   0.3,  37.6, -0.6, 47.2,   0.2),
-        (-9.9,  1.3, -10.1,  39.0, -0.6, 37.4, -20.4),
-        (-9.3, 19.6,  -6.3,  64.0,  2.6, 44.2, -18.0),
-    ]
-
     with open(CAM_PARAMS_PATH, "rb") as f:
         cam_params = pickle.load(f)
 
-    if len(cam_params) < 2:
-        raise ValueError(
-            f"test_pointcloud_alignment needs >= 2 cameras, found {len(cam_params)} in {CAM_PARAMS_PATH}"
-        )
-
-    write_camera_xml(cam_params)
-    write_scene_xml()
+    _, wrist_rs_id = load_camera_serials()
+    robot_xml, _ = select_robot_xml(wrist_rs_id)
+    write_scene_xml(robot_xml=robot_xml)
 
     model = mujoco.MjModel.from_xml_path(str(SCENE_XML))
     data = mujoco.MjData(model)
+    utils.set_robot_pose(model, data)
 
-    env = Xarm7Env()
-    env.set_cam(list(cam_params.keys()))
+    plotter = pv.Plotter()
+    plotter.add_axes_at_origin(line_width=2)
 
-    # sim = cool tone, real = warm tone (same colors across poses; one window per pose).
-    SIM_COLOR = (0.2, 0.6, 1.0)
-    REAL_COLOR = (1.0, 0.4, 0.3)
+    for rs_id, p in cam_params.items():
+        # if rs_id == "244622300362":
+        #     continue
+        print("rs_id", rs_id)
+        extrinsic = p["extrinsic"]
+        cam_name = f"camera_{rs_id}"
 
-    try:
-        for p_idx, pose_deg in enumerate(SIM_POSES_DEG):
-            utils.set_robot_pose(model, data, pose_deg)
-            real_obs = env.move_to_joint(pose_deg)
+        mj_rgb, mj_depth = render_mj(model, data, cam_name)
+        mj_extrinsic, K_mj = get_mj_cam(model, data, cam_name, W, H)
+        rs_rgb = utils.get_realsense_rgb(rs_id)
+        rs_depth = utils.get_realsense_depth(rs_id)
+        K_real = utils.get_realsense_intrinsic(rs_id)
 
-            plotter = pv.Plotter(title=f"pose {p_idx}: {pose_deg}")
-            plotter.add_axes_at_origin(line_width=2)
+        mj_pts, _ = depth_to_world_points(mj_depth, mj_rgb, K_mj, mj_extrinsic)
+        rs_pts, rs_col = depth_to_world_points(rs_depth, rs_rgb, K_real, extrinsic)
 
-            for rs_id, p in cam_params.items():
-                cam_name = f"camera_{rs_id}"
+        plotter.add_mesh(
+            pv.PolyData(mj_pts),
+            color=(0.2, 0.6, 1.0),
+            point_size=2,
+            label=f"sim {rs_id}",
+        )
+        rs_cloud = pv.PolyData(rs_pts)
+        rs_cloud["RGB"] = (rs_col * 255).astype(np.uint8)
+        plotter.add_mesh(
+            rs_cloud,
+            scalars="RGB",
+            rgb=True,
+            point_size=2,
+            label=f"real {rs_id}",
+        )
 
-                mj_rgb, mj_depth = render_mj(model, data, cam_name)
-                mj_extrinsic, K_mj = get_mj_cam(model, data, cam_name, W, H)
-                mj_pts, _ = depth_to_world_points(mj_depth, mj_rgb, K_mj, mj_extrinsic)
+        print(f"[{rs_id}] sim pts={len(mj_pts)}  real pts={len(rs_pts)}")
 
-                rs_rgb = real_obs[rs_id]["color"]
-                rs_depth = real_obs[rs_id]["depth"]
-                K_rs = p["intrinsic"]
-                if warp_image:
-                    H_rs_to_mj = (K_mj @ np.linalg.inv(K_rs)).astype(np.float32)
-                    rs_rgb = cv2.warpPerspective(rs_rgb, H_rs_to_mj, (W, H), flags=cv2.INTER_LINEAR)
-                    rs_depth = cv2.warpPerspective(rs_depth, H_rs_to_mj, (W, H), flags=cv2.INTER_NEAREST)
-                    K_for_lift = K_mj
-                else:
-                    K_for_lift = K_rs
-                rs_pts, _ = depth_to_world_points(
-                    rs_depth, rs_rgb, K_for_lift, p["extrinsic"]
-                )
-
-                plotter.add_mesh(
-                    pv.PolyData(mj_pts),
-                    color=SIM_COLOR,
-                    point_size=2,
-                    label=f"sim {rs_id}",
-                )
-                plotter.add_mesh(
-                    pv.PolyData(rs_pts),
-                    color=REAL_COLOR,
-                    point_size=2,
-                    label=f"real {rs_id}",
-                )
-                print(
-                    f"[pose{p_idx} {rs_id}] sim pts={len(mj_pts)}  real pts={len(rs_pts)}"
-                )
-
-            plotter.add_legend()
-            print(f"[pose{p_idx}] close the window to advance to the next pose")
-            plotter.show()
-    finally:
-        env.close()
+    utils.shutdown()
+    plotter.add_legend()
+    plotter.show()
 
 
 if __name__ == "__main__":
+    # main()
     test_mujoco_rgb()

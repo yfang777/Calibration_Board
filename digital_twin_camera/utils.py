@@ -50,7 +50,7 @@ def _ensure(rs_id: str) -> rs.pipeline:
 
 def _grab_aligned(rs_id: str):
     pipe = _ensure(rs_id)
-    frames = _align.process(pipe.wait_for_frames())
+    frames = _align.process(pipe.wait_for_frames(15000))
     return frames
 
 

@@ -5,13 +5,39 @@ import pickle
 import numpy as np
 import cv2
 import pyrealsense2 as rs
+import yaml
 import xml.etree.ElementTree as ET
 
+def set_if_supported(sensor, option, value):
+    if sensor.supports(option):
+        r = sensor.get_option_range(option)
+        value = max(r.min, min(r.max, value))
+        sensor.set_option(option, value)
+
+def configure_color_sensor(color_sensor):
+    # Turn off auto settings
+    set_if_supported(color_sensor, rs.option.enable_auto_exposure, 1)
+    set_if_supported(color_sensor, rs.option.enable_auto_white_balance, 1)
+    # set_if_supported(color_sensor, rs.option.enable_auto_gain, 1)
+
+
+def find_color_sensor(device):
+    for sensor in device.sensors:
+        name = sensor.get_info(rs.camera_info.name)
+        if "RGB" in name or "Color" in name:
+            return sensor
+    raise RuntimeError("No RGB/color sensor found.")
+
+
 class Calibrator:
-    def __init__(self):
+    def __init__(self, enable_depth=False):
         # Streams/resolution
         self.W = 640
         self.H = 480
+        self.enable_depth = enable_depth
+        self.frame_timeout_ms = 5000
+        self.frame_wait_attempts = 1
+        self.stream_restart_attempts = 3
 
         # Output dirs
         self.vis_dir = "./data/calibration_vis"
@@ -20,66 +46,153 @@ class Calibrator:
         os.makedirs(self.calibrate_result_dir, exist_ok=True)
 
         # Enumerate all RealSense devices
-        ctx = rs.context()
-        self.serial_numbers = [dev.get_info(rs.camera_info.serial_number) for dev in ctx.query_devices()]
-        self.n_fixed_cameras = len(self.serial_numbers)
-        print(f'Found {self.n_fixed_cameras} fixed cameras.')
+        config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.yaml")
+        with open(config_path, "r") as f:
+            config = yaml.safe_load(f)
+        self.configured_rs_ids = {
+            str(rs_id) for rs_id in config["rs_id"]["d455"].values()
+        }
 
-        # Start one pipeline per device (color+depth)
+        ctx = rs.context()
+        connected_serial_numbers = [
+            dev.get_info(rs.camera_info.serial_number) for dev in ctx.query_devices()
+        ]
+        self.serial_numbers = [
+            serial
+            for serial in connected_serial_numbers
+            if serial in self.configured_rs_ids
+        ]
+        self.n_fixed_cameras = len(self.serial_numbers)
+        camera_suffix = "" if self.n_fixed_cameras == 1 else "s"
+        print(f"Found {self.n_fixed_cameras} configured fixed camera{camera_suffix}.")
+
+        # Calibration does not need synchronized multi-camera frames. Start one
+        # RealSense pipeline at a time to avoid USB/backend stalls.
         self._rs_pipes = {}
         self._rs_profiles = {}
         self._depth_scale = {}
-        for serial in self.serial_numbers:
-            cfg = rs.config()
-            cfg.enable_device(serial)
-            
-            cfg.enable_stream(rs.stream.color, self.W, self.H, rs.format.bgr8, 30)
-            cfg.enable_stream(rs.stream.depth, self.W, self.H, rs.format.z16, 30)
 
-            pipe = rs.pipeline()
-            profile = pipe.start(cfg)
+        self.calibration_dictionary = None
+        self.calibration_board = None
+        self.detector_params = None
+        self.charuco_params = None
+        self.charuco_detector = None
 
-            self._rs_pipes[serial] = pipe
-            self._rs_profiles[serial] = profile
-            depth_sensor = profile.get_device().first_depth_sensor()
+        # Placeholders for extrinsics
+        self.R_cam2world = None
+        self.t_cam2world = None
 
-            self._depth_scale[serial] = float(depth_sensor.get_depth_scale())
-
-        # --- UPDATED API: Initialize CharucoDetector once ---
+    def _init_charuco_detector(self):
         self.calibration_dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_5X5_250)
         self.calibration_board = cv2.aruco.CharucoBoard(
             size=(12, 9),           # Grid size to match 600x400mm
-            squareLength=0.03,       # 40mm square length in meters
-            markerLength=0.022,       # 30mm marker length (75% of square size)
+            squareLength=0.03,       # 30mm square length in meters
+            markerLength=0.022,      # 22mm marker length
             dictionary=self.calibration_dictionary,
         )
 
         self.detector_params = cv2.aruco.DetectorParameters()
         self.charuco_params = cv2.aruco.CharucoParameters()
-        
-        # New OpenCV 4.7+ Detector
         self.charuco_detector = cv2.aruco.CharucoDetector(
             self.calibration_board, self.charuco_params, self.detector_params
         )
 
-        # Placeholders for extrinsics
-        self.R_cam2world = None
-        self.t_cam2world = None
+    def _clear_charuco_detector(self):
+        self.charuco_detector = None
+        self.charuco_params = None
+        self.detector_params = None
+        self.calibration_board = None
+        self.calibration_dictionary = None
+
+    def _start_camera(self, serial):
+        if serial in self._rs_pipes:
+            return
+
+        cfg = rs.config()
+        cfg.enable_device(serial)
+        cfg.enable_stream(rs.stream.color, self.W, self.H, rs.format.bgr8, 30)
+        if self.enable_depth:
+            cfg.enable_stream(rs.stream.depth, self.W, self.H, rs.format.z16, 30)
+
+        pipe = rs.pipeline()
+        profile = pipe.start(cfg)
+        try:
+            device = profile.get_device()
+            color_sensor = find_color_sensor(device)
+            configure_color_sensor(color_sensor)
+
+            if self.enable_depth:
+                depth_sensor = device.first_depth_sensor()
+                self._depth_scale[serial] = float(depth_sensor.get_depth_scale())
+        except Exception:
+            pipe.stop()
+            raise
+
+        self._rs_pipes[serial] = pipe
+        self._rs_profiles[serial] = profile
+
+    def _stop_camera(self, serial):
+        pipe = self._rs_pipes.pop(serial, None)
+        if pipe is None:
+            return
+        try:
+            pipe.stop()
+        finally:
+            self._rs_profiles.pop(serial, None)
+            self._depth_scale.pop(serial, None)
+
+    def close(self):
+        for serial in list(self._rs_pipes):
+            self._stop_camera(serial)
+
+    def _restart_camera(self, serial):
+        self._stop_camera(serial)
+        time.sleep(1.0)
+        self._start_camera(serial)
+
+    def _wait_for_frames(self, pipe, serial):
+        last_error = None
+        for attempt in range(1, self.frame_wait_attempts + 1):
+            try:
+                return pipe.wait_for_frames(self.frame_timeout_ms)
+            except RuntimeError as exc:
+                last_error = exc
+                print(
+                    f"Camera {serial} frame wait timed out "
+                    f"({attempt}/{self.frame_wait_attempts})."
+                )
+        raise RuntimeError(
+            f"Camera {serial} did not deliver frames after "
+            f"{self.frame_wait_attempts} attempts."
+        ) from last_error
 
     def get_obs(self, get_color=True, get_depth=False) -> dict:
         """
         ONE synchronized frame per camera (depth aligned to color if requested).
         Returns keys: color_{i} [H,W,3 BGR], depth_{i} [H,W float meters], timestamp
         """
+        if get_depth and not self.enable_depth:
+            raise ValueError("Depth was requested, but this Calibrator was started without depth.")
+
         align_to_color = rs.align(rs.stream.color) if get_depth else None
         obs = {}
         timestamp = time.time()
 
         # Run dummy loop to flush buffer (auto-exposure settle)
         for _ in range(1):
-            for cam_idx, serial in enumerate(self.serial_numbers):
-                pipe = self._rs_pipes[serial]
-                frames = pipe.wait_for_frames()
+            for serial, pipe in list(self._rs_pipes.items()):
+                cam_idx = self.serial_numbers.index(serial)
+                for restart_attempt in range(self.stream_restart_attempts + 1):
+                    try:
+                        frames = self._wait_for_frames(pipe, serial)
+                        break
+                    except RuntimeError:
+                        if restart_attempt >= self.stream_restart_attempts:
+                            raise
+                        print(f"Restarting camera {serial} after frame timeout.")
+                        self._restart_camera(serial)
+                        pipe = self._rs_pipes[serial]
+
                 if get_depth:
                     frames = align_to_color.process(frames)
 
@@ -100,96 +213,110 @@ class Calibrator:
 
     def get_intrinsics(self):
         """
-        List of 3x3 K matrices in same order as self.serial_numbers.
+        3x3 K matrices for active camera pipelines.
         """
         intrinsics = {}
-        for serial in self.serial_numbers:
-            profile = self._rs_profiles[serial]
-            color_stream = profile.get_stream(rs.stream.color).as_video_stream_profile()
-            intr = color_stream.get_intrinsics()
-            K = np.array([[intr.fx, 0.0, intr.ppx],
-                          [0.0, intr.fy, intr.ppy],
-                          [0.0, 0.0, 1.0]], dtype=np.float64)
-            intrinsics[serial] = K
+        for serial in self._rs_profiles:
+            intrinsics[serial] = self.get_intrinsic(serial)
         return intrinsics
 
+    def get_intrinsic(self, serial):
+        profile = self._rs_profiles[serial]
+        color_stream = profile.get_stream(rs.stream.color).as_video_stream_profile()
+        intr = color_stream.get_intrinsics()
+        return np.array([[intr.fx, 0.0, intr.ppx],
+                         [0.0, intr.fy, intr.ppy],
+                         [0.0, 0.0, 1.0]], dtype=np.float64)
+
     def calibrate(self, visualize=True):
-        intrinsics = self.get_intrinsics()
         camera_params = {}
         dist_coef = np.zeros(5, dtype=np.float64)
 
         for i in range(self.n_fixed_cameras):
 
             serial_number = self.serial_numbers[i]
+            if serial_number not in self.configured_rs_ids:
+                print("Skip serial_num not in config:", serial_number)
+                continue
             print("Calibrate on serial_num:", serial_number)
-            intrinsic = intrinsics[serial_number]
+            self._clear_charuco_detector()
+            self._start_camera(serial_number)
+            intrinsic = self.get_intrinsic(serial_number)
 
             c2ws = []
             flag = True
-            
-            while flag:
-                flag = False
 
-                obs = self.get_obs(get_color=True, get_depth=True)
-                colors = [obs[f"color_{k}"][0] for k in range(self.n_fixed_cameras)]
-                
-                # Current camera image
-                color_bgr = colors[i]
-                
-                # --- UPDATED API: Single call detection ---
-                charuco_corners, charuco_ids, marker_corners, marker_ids = self.charuco_detector.detectBoard(color_bgr)
+            try:
+                while flag:
+                    flag = False
 
-                # Check if we found enough corners
-                if charuco_corners is None or len(charuco_corners) < 4:
-                    print(f"Detection failed charuco_corners: {len(charuco_corners)} or not enough corners. Retrying...")
-                    flag = True
-                    continue
+                    # Current camera image
+                    obs = self.get_obs(get_color=True, get_depth=False)
+                    color_bgr = obs[f"color_{i}"][0]
 
-                # Prepare object points (3D) from the board definition
-                obj_points = self.calibration_board.getChessboardCorners()[charuco_ids.flatten(), :]
+                    try:
+                        self._init_charuco_detector()
 
-                # Estimate Pose using solvePnP
-                retval, rvec, tvec = cv2.solvePnP(
-                    obj_points,
-                    charuco_corners,
-                    intrinsic,
-                    dist_coef,
-                    flags=cv2.SOLVEPNP_ITERATIVE
-                )
+                        # --- UPDATED API: Single call detection ---
+                        charuco_corners, charuco_ids, marker_corners, marker_ids = self.charuco_detector.detectBoard(color_bgr)
 
-                if not retval:
-                    print("Pose estimation failed (retval=False). Retrying...")
-                    flag = True
-                    continue
-                else:
-                    print("Get Retval success")
-                
-                # Reproject to calculate error
-                reprojected_points, _ = cv2.projectPoints(
-                    obj_points,
-                    rvec,
-                    tvec,
-                    intrinsic,
-                    dist_coef,
-                )
+                        # Check if we found enough corners
+                        num_corners = 0 if charuco_corners is None else len(charuco_corners)
+                        if num_corners < 4:
+                            print(f"Detection failed charuco_corners: {num_corners} or not enough corners. Retrying...")
+                            flag = True
+                            continue
 
-                # Reshape for easier calculation
-                reprojected_points = reprojected_points.reshape(-1, 2)
-                charuco_corners_flat = charuco_corners.reshape(-1, 2)
-                
-                # Calculate RMSE
-                error = np.sqrt(
-                    np.sum((reprojected_points - charuco_corners_flat) ** 2, axis=1)
-                ).mean()
+                        # Prepare object points (3D) from the board definition
+                        obj_points = self.calibration_board.getChessboardCorners()[charuco_ids.flatten(), :]
+                    finally:
+                        self._clear_charuco_detector()
 
-                print("Reprojection Error:", error)
-                print("charuco_corners:", len(charuco_corners))
+                    # Estimate Pose using solvePnP
+                    retval, rvec, tvec = cv2.solvePnP(
+                        obj_points,
+                        charuco_corners,
+                        intrinsic,
+                        dist_coef,
+                        flags=cv2.SOLVEPNP_ITERATIVE
+                    )
 
-                # Threshold check
-                if error > 0.3 or len(charuco_corners) < 35:
-                    flag = True
-                    print("Error too high or points too low. Please try again.")
-                    continue
+                    if not retval:
+                        print("Pose estimation failed (retval=False). Retrying...")
+                        flag = True
+                        continue
+                    else:
+                        print("Get Retval success")
+
+                    # Reproject to calculate error
+                    reprojected_points, _ = cv2.projectPoints(
+                        obj_points,
+                        rvec,
+                        tvec,
+                        intrinsic,
+                        dist_coef,
+                    )
+
+                    # Reshape for easier calculation
+                    reprojected_points = reprojected_points.reshape(-1, 2)
+                    charuco_corners_flat = charuco_corners.reshape(-1, 2)
+
+                    # Calculate RMSE
+                    error = np.sqrt(
+                        np.sum((reprojected_points - charuco_corners_flat) ** 2, axis=1)
+                    ).mean()
+
+                    print("Reprojection Error:", error)
+                    print("charuco_corners:", len(charuco_corners))
+
+                    # Threshold check
+                    if error > 0.3 or len(charuco_corners) < 35:
+                        flag = True
+                        print("Error too high or points too low. Please try again.")
+                        continue
+            finally:
+                self._clear_charuco_detector()
+                self._stop_camera(serial_number)
             
             print("Success Project")
             
@@ -214,7 +341,7 @@ class Calibrator:
             # Save into dict
             camera_params[serial_number] = {
                 "extrinsic": extrinsic,
-                "intrinsic": intrinsics[serial_number],
+                "intrinsic": intrinsic,
             }
 
             if visualize:
@@ -246,7 +373,10 @@ class Calibrator:
 
 def main():
     calib = Calibrator()
-    calib.calibrate()
+    try:
+        calib.calibrate()
+    finally:
+        calib.close()
     
     with open("./data/calib_params/cam_params.pkl", "rb") as f:
         camera_params = pickle.load(f)

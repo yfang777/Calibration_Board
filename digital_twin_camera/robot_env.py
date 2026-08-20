@@ -47,11 +47,18 @@ class Xarm7Env:
                 self.arm.clean_gripper_error()
                 self.arm.set_gripper_position(850, wait=True)
 
-    def set_cam(self, rs_ids, width=640, height=480, fps=30, settle_seconds=2.0):
+    def set_cam(self, rs_ids, width=640, height=480, fps=30, settle_seconds=2.0, enable_depth=True):
         """Spawn one ``CameraWorker`` per serial in ``rs_ids``."""
         for rs_id in rs_ids:
             parent_conn, child_conn = mp.Pipe()
-            worker = CameraWorker(child_conn, rs_id, width=width, height=height, fps=fps)
+            worker = CameraWorker(
+                child_conn,
+                rs_id,
+                width=width,
+                height=height,
+                fps=fps,
+                enable_depth=enable_depth,
+            )
             worker.start()
             self.workers.append(worker)
             self.pipes.append(parent_conn)
@@ -83,18 +90,28 @@ class Xarm7Env:
 
     def get_obs(self):
         """Trigger every camera and collect ``{rs_id: {color, depth}}``."""
-        for pipe in self.pipes:
-            pipe.send("GET")
+        for rs_id, pipe in zip(self.rs_ids, self.pipes):
+            try:
+                pipe.send("GET")
+            except (BrokenPipeError, EOFError) as exc:
+                raise RuntimeError(f"Camera worker for {rs_id} is not available") from exc
 
         obs = {}
         for pipe in self.pipes:
-            rs_id, color_bgr, depth_m = pipe.recv()
+            msg = pipe.recv()
+            if msg[0] == "ERROR":
+                _, rs_id, err = msg
+                raise RuntimeError(f"Camera worker for {rs_id} failed: {err}")
+            rs_id, color_bgr, depth_m = msg
             obs[rs_id] = {"color": color_bgr, "depth": depth_m}
         return obs
 
     def close(self):
         for pipe in self.pipes:
-            pipe.send("STOP")
+            try:
+                pipe.send("STOP")
+            except (BrokenPipeError, EOFError):
+                pass
         for worker in self.workers:
             worker.join()
         self.workers.clear()
