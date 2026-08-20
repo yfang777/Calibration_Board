@@ -438,44 +438,6 @@ def _load_camera_serials(
     return fixed_serial, wrist_serial
 
 
-def _query_realsense_intrinsic(serial: str) -> np.ndarray:
-    """Start one RealSense briefly and return its active color intrinsic."""
-    try:
-        import pyrealsense2 as rs
-    except ModuleNotFoundError as exc:
-        raise RuntimeError(
-            "Capture requires pyrealsense2 in the active Python environment."
-        ) from exc
-
-    pipeline = rs.pipeline()
-    config = rs.config()
-    config.enable_device(serial)
-    config.enable_stream(
-        rs.stream.color,
-        IMAGE_WIDTH,
-        IMAGE_HEIGHT,
-        rs.format.bgr8,
-        IMAGE_FPS,
-    )
-    started = False
-    try:
-        profile = pipeline.start(config)
-        started = True
-        stream = profile.get_stream(rs.stream.color).as_video_stream_profile()
-        intrinsic = stream.get_intrinsics()
-        return np.array(
-            [
-                [intrinsic.fx, 0.0, intrinsic.ppx],
-                [0.0, intrinsic.fy, intrinsic.ppy],
-                [0.0, 0.0, 1.0],
-            ],
-            dtype=np.float64,
-        )
-    finally:
-        if started:
-            pipeline.stop()
-
-
 def _assert_realsense_connected(serials: Sequence[str]) -> None:
     try:
         import pyrealsense2 as rs
@@ -583,35 +545,6 @@ def capture_dataset(args: argparse.Namespace) -> Path:
     capture_dir.mkdir(parents=True, exist_ok=True)
     visualization_dir.mkdir(parents=True, exist_ok=True)
 
-    print("Reading active RealSense color intrinsics...")
-    fixed_intrinsic = _query_realsense_intrinsic(fixed_serial)
-    wrist_intrinsic = _query_realsense_intrinsic(wrist_serial)
-    manifest: dict[str, Any] = {
-        "schema_version": 1,
-        "created_utc": _utc_now(),
-        "board": {
-            "dictionary": BOARD_DICTIONARY_NAME,
-            "size": list(BOARD_SIZE),
-            "square_length_m": BOARD_SQUARE_M,
-            "marker_length_m": BOARD_MARKER_M,
-        },
-        "image": {
-            "width": IMAGE_WIDTH,
-            "height": IMAGE_HEIGHT,
-            "fps": IMAGE_FPS,
-            "distortion": DISTORTION.tolist(),
-        },
-        "fixed_serial": fixed_serial,
-        "wrist_serial": wrist_serial,
-        "fixed_intrinsic": fixed_intrinsic,
-        "wrist_intrinsic": wrist_intrinsic,
-        "robot_ip": args.robot_ip,
-        "robot_pose_frame": "base_from_end_effector_tcp",
-        "pose_count_expected": len(CAPTURE_JOINTS_DEG),
-        "entries": [],
-    }
-    _write_json_atomic(manifest_path, manifest)
-
     try:
         from digital_twin_camera.robot_env import Xarm7Env
     except (ImportError, ModuleNotFoundError) as exc:
@@ -634,11 +567,40 @@ def capture_dataset(args: argparse.Namespace) -> Path:
             fps=IMAGE_FPS,
             enable_depth=False,
         )
+        print("Reading active RealSense color intrinsics...")
+        fixed_intrinsic = environment.camera_intrinsics[fixed_serial].copy()
+        wrist_intrinsic = environment.camera_intrinsics[wrist_serial].copy()
         if environment.arm is None:
             raise RuntimeError("xArm connection was not initialized.")
         preflight_frames = environment.get_obs()
         if fixed_serial not in preflight_frames or wrist_serial not in preflight_frames:
             raise RuntimeError("Paired RealSense preflight did not return both cameras.")
+
+        manifest: dict[str, Any] = {
+            "schema_version": 1,
+            "created_utc": _utc_now(),
+            "board": {
+                "dictionary": BOARD_DICTIONARY_NAME,
+                "size": list(BOARD_SIZE),
+                "square_length_m": BOARD_SQUARE_M,
+                "marker_length_m": BOARD_MARKER_M,
+            },
+            "image": {
+                "width": IMAGE_WIDTH,
+                "height": IMAGE_HEIGHT,
+                "fps": IMAGE_FPS,
+                "distortion": DISTORTION.tolist(),
+            },
+            "fixed_serial": fixed_serial,
+            "wrist_serial": wrist_serial,
+            "fixed_intrinsic": fixed_intrinsic,
+            "wrist_intrinsic": wrist_intrinsic,
+            "robot_ip": args.robot_ip,
+            "robot_pose_frame": "base_from_end_effector_tcp",
+            "pose_count_expected": len(CAPTURE_JOINTS_DEG),
+            "entries": [],
+        }
+        _write_json_atomic(manifest_path, manifest)
 
         for pose_index, commanded_joints_deg in enumerate(CAPTURE_JOINTS_DEG):
             print(

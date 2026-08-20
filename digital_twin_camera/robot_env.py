@@ -1,18 +1,15 @@
-"""xArm7 + RealSense environment for digital-twin camera alignment.
+"""xArm7 + grouped RealSense environment for camera alignment.
 
-Connects to a real xArm7 over the network, spawns one ``CameraWorker`` per
-RealSense device, and exposes ``move_to_joint`` + ``get_obs`` so callers can
-drive the arm to a joint configuration and grab synchronized RGB+depth from
-every camera.
+Connects to a real xArm7, runs every RealSense pipeline in one dedicated
+camera process, and exposes robot movement plus paired RGB/depth capture.
 """
 
-import multiprocessing as mp
 import time
 
 import numpy as np
 from xarm.wrapper import XArmAPI
 
-from .camera import CameraWorker
+from .camera import CameraGroupWorker
 
 
 def angle2radian(angle):
@@ -25,9 +22,9 @@ def radian2angle(radian):
 
 class Xarm7Env:
     def __init__(self, robot_ip="192.168.1.196", gripper_enable=True, connect_robot=True):
-        self.workers: list[CameraWorker] = []
-        self.pipes: list[mp.connection.Connection] = []
+        self.camera_worker: CameraGroupWorker | None = None
         self.rs_ids: list[str] = []
+        self.camera_intrinsics: dict[str, np.ndarray] = {}
 
         self.init_servo_angle = np.array([0.0, -45.0, 0.0, 30.0, 0.0, 75.0, 0.0])
         self.gripper_enable = gripper_enable
@@ -47,23 +44,67 @@ class Xarm7Env:
                 self.arm.clean_gripper_error()
                 self.arm.set_gripper_position(850, wait=True)
 
-    def set_cam(self, rs_ids, width=640, height=480, fps=30, settle_seconds=2.0, enable_depth=True):
-        """Spawn one ``CameraWorker`` per serial in ``rs_ids``."""
-        for rs_id in rs_ids:
-            parent_conn, child_conn = mp.Pipe()
-            worker = CameraWorker(
-                child_conn,
-                rs_id,
-                width=width,
-                height=height,
-                fps=fps,
-                enable_depth=enable_depth,
-            )
+    @staticmethod
+    def _raise_camera_error(message) -> None:
+        _, rs_id, error = message
+        camera_label = rs_id if rs_id is not None else "unknown"
+        raise RuntimeError(f"Camera worker for {camera_label} failed: {error}")
+
+    def set_cam(
+        self,
+        rs_ids,
+        width=640,
+        height=480,
+        fps=30,
+        settle_seconds=2.0,
+        enable_depth=True,
+    ):
+        """Start one worker that owns every RealSense in ``rs_ids``."""
+        if self.camera_worker is not None:
+            raise RuntimeError("RealSense cameras have already been started.")
+
+        serials = [str(rs_id) for rs_id in rs_ids]
+        if not serials:
+            raise ValueError("At least one RealSense serial is required.")
+        if len(set(serials)) != len(serials):
+            raise ValueError(f"RealSense serials must be unique: {serials}")
+        if settle_seconds < 0:
+            raise ValueError("settle_seconds cannot be negative.")
+
+        worker = CameraGroupWorker(
+            serials,
+            width=width,
+            height=height,
+            fps=fps,
+            enable_depth=enable_depth,
+        )
+        self.camera_worker = worker
+        self.rs_ids = serials
+        try:
             worker.start()
-            self.workers.append(worker)
-            self.pipes.append(parent_conn)
-            self.rs_ids.append(rs_id)
-        time.sleep(settle_seconds)
+            message = worker.pipe.recv()
+            if message[0] == "ERROR":
+                self._raise_camera_error(message)
+            if message[0] != "READY":
+                raise RuntimeError(
+                    f"Unexpected camera worker startup response: {message[0]!r}"
+                )
+            self.camera_intrinsics = {
+                rs_id: np.asarray(intrinsic, dtype=np.float64)
+                for rs_id, intrinsic in message[1].items()
+            }
+            if set(self.camera_intrinsics) != set(self.rs_ids):
+                raise RuntimeError(
+                    "Camera worker did not return intrinsics for every RealSense."
+                )
+            if settle_seconds > 0:
+                time.sleep(settle_seconds)
+        except (BrokenPipeError, EOFError) as exc:
+            self._close_camera_worker()
+            raise RuntimeError("Camera worker exited during startup.") from exc
+        except BaseException:
+            self._close_camera_worker()
+            raise
 
     def reset(self):
         if self.arm is None:
@@ -89,34 +130,48 @@ class Xarm7Env:
         return self.get_obs()
 
     def get_obs(self):
-        """Trigger every camera and collect ``{rs_id: {color, depth}}``."""
-        for rs_id, pipe in zip(self.rs_ids, self.pipes):
-            try:
-                pipe.send("GET")
-            except (BrokenPipeError, EOFError) as exc:
-                raise RuntimeError(f"Camera worker for {rs_id} is not available") from exc
+        """Trigger one grouped worker and collect ``{rs_id: {color, depth}}``."""
+        worker = self.camera_worker
+        if worker is None:
+            raise RuntimeError("RealSense cameras have not been started.")
+        try:
+            worker.pipe.send("GET")
+            message = worker.pipe.recv()
+        except (BrokenPipeError, EOFError) as exc:
+            raise RuntimeError("Camera worker is not available.") from exc
 
-        obs = {}
-        for pipe in self.pipes:
-            msg = pipe.recv()
-            if msg[0] == "ERROR":
-                _, rs_id, err = msg
-                raise RuntimeError(f"Camera worker for {rs_id} failed: {err}")
-            rs_id, color_bgr, depth_m = msg
-            obs[rs_id] = {"color": color_bgr, "depth": depth_m}
-        return obs
+        if message[0] == "ERROR":
+            self._raise_camera_error(message)
+        if message[0] != "OBS":
+            raise RuntimeError(
+                f"Unexpected camera worker capture response: {message[0]!r}"
+            )
+        observations = message[1]
+        if set(observations) != set(self.rs_ids):
+            raise RuntimeError(
+                "Grouped camera observation did not contain every RealSense."
+            )
+        return observations
+
+    def _close_camera_worker(self) -> None:
+        worker = self.camera_worker
+        if worker is None:
+            return
+        try:
+            if worker.is_alive():
+                try:
+                    worker.pipe.send("STOP")
+                except (BrokenPipeError, EOFError):
+                    pass
+            worker.join()
+        finally:
+            worker.close()
+            self.camera_worker = None
+            self.rs_ids.clear()
+            self.camera_intrinsics.clear()
 
     def close(self):
-        for pipe in self.pipes:
-            try:
-                pipe.send("STOP")
-            except (BrokenPipeError, EOFError):
-                pass
-        for worker in self.workers:
-            worker.join()
-        self.workers.clear()
-        self.pipes.clear()
-        self.rs_ids.clear()
+        self._close_camera_worker()
 
         if self.arm is not None:
             if self.gripper_enable:
