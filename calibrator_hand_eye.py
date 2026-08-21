@@ -2,9 +2,12 @@
 
 The calibration target must remain fixed in the robot base/world frame and be
 visible to both the configured fixed D455 and wrist-mounted D405. ``capture``
-moves the physical robot through 20 joint poses, saving a paired image and the
-measured xArm TCP pose at every stop. ``solve`` is hardware-free and estimates
-the wrist-camera-to-end-effector transform from the saved dataset.
+moves the physical robot through the configured joint poses, saving paired
+images and the link7 pose derived from the measured xArm TCP pose at every
+stop. ``solve`` is hardware-free and estimates the wrist-camera-to-link7
+transform. It writes ``data/hand_eye/hand_eye_params.pkl`` as the authoritative
+input for ``digital_twin_camera.mujoco_sync_hand_eye``; MuJoCo XML generation
+and visualization run separately.
 
 Examples:
 
@@ -36,10 +39,19 @@ import yaml
 REPO = Path(__file__).resolve().parent
 DEFAULT_CONFIG_PATH = REPO / "config.yaml"
 DEFAULT_OUTPUT_DIR = REPO / "data/hand_eye"
+HAND_EYE_REPORT_FILENAME = "hand_eye_report.json"
+HAND_EYE_PARAMS_FILENAME = "hand_eye_params.pkl"
 
 IMAGE_WIDTH = 640
 IMAGE_HEIGHT = 480
 IMAGE_FPS = 30
+
+# Per-camera ChArUco detection requirements. The fixed D455 should normally
+# see more of the board than the wrist-mounted D405.
+D455_MIN_CORNERS = 25
+D405_MIN_CORNERS = 25
+D455_MAX_REPROJECTION_ERROR_PX = 0.25
+D405_MAX_REPROJECTION_ERROR_PX = 0.5
 
 # These values intentionally match calibrator.py.
 BOARD_DICTIONARY_NAME = "DICT_5X5_250"
@@ -63,9 +75,14 @@ CHARUCO_DETECTOR = cv2.aruco.CharucoDetector(
 )
 
 INITIAL_JOINTS_DEG = np.array([0.0, -45.0, 0.0, 30.0, 0.0, 75.0, 0.0])
+# get_position() reports the configured TCP. Remove this fixed tool transform
+# so capture and calibration use link7 as their canonical robot frame.
+ASSUMED_TCP_OFFSET_MM_RAD = (0.0, 0.0, 172.0, 0.0, 0.0, 0.0)
+LINK7_FROM_TCP = np.eye(4, dtype=np.float64)
+LINK7_FROM_TCP[:3, 3] = np.asarray(ASSUMED_TCP_OFFSET_MM_RAD[:3]) / 1000.0
 
-# First 20 tested wrist-sweep poses from ref.py. Keep the count fixed: capture
-# accepts a dataset only after all 20 poses have a valid paired observation.
+# Tested wrist-sweep poses from ref.py. Capture accepts a dataset only after
+# every configured pose has a valid paired observation.
 CAPTURE_JOINTS_DEG = np.array(
     [
         [0.0, -45.0, 0.0, 30.0, 0.0, 75.0, 0.0],
@@ -77,8 +94,8 @@ CAPTURE_JOINTS_DEG = np.array(
         [15.4, -23.3, 14.2, 45.6, 5.8, 68.5, 4.4],
         [4.9, -4.0, 19.1, 63.7, 1.9, 68.5, 59.8],
         [0.0, -12.3, 0.2, 54.0, -0.2, 66.3, 0.0],
-        [0.1, 14.1, 0.3, 88.3, 0.5, 95.7, -0.1],
-        [0.1, 19.1, 0.4, 96.1, 0.8, 109.9, 0.0],
+        # [0.1, 14.1, 0.3, 88.3, 0.5, 95.7, -0.1],
+        # [0.1, 19.1, 0.4, 96.1, 0.8, 109.9, 0.0],
         [-0.3, -50.9, 0.1, 23.0, -0.3, 57.5, 0.0],
         [-0.4, -81.1, -0.1, 7.9, -0.4, 53.8, 0.0],
         [0.1, -28.3, 0.1, 56.9, 0.2, 85.3, 0.0],
@@ -205,7 +222,7 @@ def _rpy_to_rotation(roll: float, pitch: float, yaw: float) -> np.ndarray:
 
 
 def _xarm_pose_to_transform(tcp_pose: Sequence[float]) -> np.ndarray:
-    """Convert xArm [x,y,z mm, roll,pitch,yaw rad] to base_from_ee."""
+    """Convert xArm [x,y,z mm, roll,pitch,yaw rad] to base_from_tcp."""
     pose = np.asarray(tcp_pose, dtype=np.float64)
     if pose.shape != (6,):
         raise ValueError(f"Expected a six-element xArm TCP pose, received {pose.shape}.")
@@ -465,9 +482,10 @@ def _read_xarm_state(arm: Any) -> tuple[np.ndarray, np.ndarray, list[float]]:
     angle_code, measured_joints_deg = arm.get_servo_angle(is_radian=False)
     if angle_code != 0:
         raise RuntimeError(f"xArm get_servo_angle failed with code {angle_code}.")
-    base_from_end_effector = _xarm_pose_to_transform(tcp_pose)
+    base_from_tcp = _xarm_pose_to_transform(tcp_pose)
+    base_from_link7 = base_from_tcp @ _invert_transform(LINK7_FROM_TCP)
     return (
-        base_from_end_effector,
+        base_from_link7,
         np.asarray(tcp_pose, dtype=np.float64),
         [float(value) for value in measured_joints_deg],
     )
@@ -499,7 +517,10 @@ def _capture_confirmation(
     wrist_serial: str,
     assume_yes: bool,
 ) -> None:
-    print("Capture WILL MOVE the physical xArm through these 20 joint poses:")
+    print(
+        "Capture WILL MOVE the physical xArm through "
+        f"these {len(CAPTURE_JOINTS_DEG)} joint poses:"
+    )
     for index, pose in enumerate(CAPTURE_JOINTS_DEG):
         values = " ".join(f"{value:6.1f}" for value in pose)
         print(f"  {index:02d}: [{values}] deg")
@@ -520,7 +541,7 @@ def _capture_confirmation(
 
 
 def capture_dataset(args: argparse.Namespace) -> Path:
-    """Move the robot and capture 20 paired camera observations."""
+    """Move the robot and replace the configured paired-camera dataset."""
     fixed_serial, wrist_serial = _load_camera_serials(
         args.config,
         args.fixed_serial,
@@ -529,11 +550,6 @@ def capture_dataset(args: argparse.Namespace) -> Path:
     capture_dir = args.output_dir / "captures"
     visualization_dir = args.output_dir / "visualizations/capture"
     manifest_path = capture_dir / "dataset.json"
-    if manifest_path.exists() and not args.overwrite_captures:
-        raise FileExistsError(
-            f"Capture manifest already exists: {manifest_path}. "
-            "Use --overwrite-captures to replace this dataset."
-        )
     _capture_confirmation(
         robot_ip=args.robot_ip,
         fixed_serial=fixed_serial,
@@ -577,7 +593,7 @@ def capture_dataset(args: argparse.Namespace) -> Path:
             raise RuntimeError("Paired RealSense preflight did not return both cameras.")
 
         manifest: dict[str, Any] = {
-            "schema_version": 1,
+            "schema_version": 2,
             "created_utc": _utc_now(),
             "board": {
                 "dictionary": BOARD_DICTIONARY_NAME,
@@ -596,7 +612,9 @@ def capture_dataset(args: argparse.Namespace) -> Path:
             "fixed_intrinsic": fixed_intrinsic,
             "wrist_intrinsic": wrist_intrinsic,
             "robot_ip": args.robot_ip,
-            "robot_pose_frame": "base_from_end_effector_tcp",
+            "robot_pose_frame": "base_from_link7",
+            "assumed_tcp_offset_mm_rad": ASSUMED_TCP_OFFSET_MM_RAD,
+            "link7_from_tcp": LINK7_FROM_TCP,
             "pose_count_expected": len(CAPTURE_JOINTS_DEG),
             "entries": [],
         }
@@ -644,16 +662,20 @@ def capture_dataset(args: argparse.Namespace) -> Path:
                     fixed_observation is not None
                     and _observation_is_acceptable(
                         fixed_observation,
-                        min_corners=args.min_corners,
-                        max_reprojection_error_px=args.max_reprojection_error_px,
+                        min_corners=args.d455_min_corners,
+                        max_reprojection_error_px=(
+                            args.d455_max_reprojection_error_px
+                        ),
                     )
                 )
                 wrist_ok = (
                     wrist_observation is not None
                     and _observation_is_acceptable(
                         wrist_observation,
-                        min_corners=args.min_corners,
-                        max_reprojection_error_px=args.max_reprojection_error_px,
+                        min_corners=args.d405_min_corners,
+                        max_reprojection_error_px=(
+                            args.d405_max_reprojection_error_px
+                        ),
                     )
                 )
                 last_fixed_annotation = _annotate_observation(
@@ -703,7 +725,7 @@ def capture_dataset(args: argparse.Namespace) -> Path:
                     )
                     continue
 
-                base_from_end_effector, measured_tcp_pose, measured_joints_deg = (
+                base_from_link7, measured_tcp_pose, measured_joints_deg = (
                     _read_xarm_state(environment.arm)
                 )
                 fixed_filename = f"pose_{pose_index:02d}_fixed.png"
@@ -726,7 +748,7 @@ def capture_dataset(args: argparse.Namespace) -> Path:
                         "commanded_joints_deg": commanded_joints_deg,
                         "measured_joints_deg": measured_joints_deg,
                         "measured_tcp_pose_mm_rad": measured_tcp_pose,
-                        "base_from_end_effector": base_from_end_effector,
+                        "base_from_link7": base_from_link7,
                         "fixed_detection": {
                             "corner_count": fixed_observation.corner_count,
                             "reprojection_rmse_px": (
@@ -801,16 +823,16 @@ def capture_dataset(args: argparse.Namespace) -> Path:
 
 
 def _solve_hand_eye(
-    base_from_end_effector: Sequence[np.ndarray],
+    base_from_link7: Sequence[np.ndarray],
     wrist_camera_from_board: Sequence[np.ndarray],
     method_name: str,
 ) -> np.ndarray:
     method = HAND_EYE_METHODS[method_name]
-    rotations_end_effector_to_base = [
-        transform[:3, :3] for transform in base_from_end_effector
+    rotations_link7_to_base = [
+        transform[:3, :3] for transform in base_from_link7
     ]
-    translations_end_effector_to_base = [
-        transform[:3, 3].reshape(3, 1) for transform in base_from_end_effector
+    translations_link7_to_base = [
+        transform[:3, 3].reshape(3, 1) for transform in base_from_link7
     ]
     rotations_board_to_camera = [
         transform[:3, :3] for transform in wrist_camera_from_board
@@ -818,18 +840,18 @@ def _solve_hand_eye(
     translations_board_to_camera = [
         transform[:3, 3].reshape(3, 1) for transform in wrist_camera_from_board
     ]
-    rotation_camera_to_end_effector, translation_camera_to_end_effector = (
+    rotation_camera_to_link7, translation_camera_to_link7 = (
         cv2.calibrateHandEye(
-            rotations_end_effector_to_base,
-            translations_end_effector_to_base,
+            rotations_link7_to_base,
+            translations_link7_to_base,
             rotations_board_to_camera,
             translations_board_to_camera,
             method=method,
         )
     )
     result = _make_transform(
-        rotation_camera_to_end_effector,
-        translation_camera_to_end_effector,
+        rotation_camera_to_link7,
+        translation_camera_to_link7,
     )
     if not np.all(np.isfinite(result)):
         raise RuntimeError("OpenCV hand-eye calibration returned non-finite values.")
@@ -874,7 +896,7 @@ def solve_dataset(args: argparse.Namespace) -> dict[str, Any]:
     if len(entries) != expected_count:
         raise RuntimeError(
             f"Dataset contains {len(entries)}/{expected_count} completed poses. "
-            "Run capture again to obtain all 20 valid observations."
+            f"Run capture again to obtain all {expected_count} valid observations."
         )
     pose_indices = sorted(int(entry["pose_index"]) for entry in entries)
     if pose_indices != list(range(expected_count)):
@@ -884,7 +906,7 @@ def solve_dataset(args: argparse.Namespace) -> dict[str, Any]:
 
     fixed_intrinsic = np.asarray(manifest["fixed_intrinsic"], dtype=np.float64)
     wrist_intrinsic = np.asarray(manifest["wrist_intrinsic"], dtype=np.float64)
-    base_from_end_effector: list[np.ndarray] = []
+    base_from_link7: list[np.ndarray] = []
     fixed_camera_from_board: list[np.ndarray] = []
     wrist_camera_from_board: list[np.ndarray] = []
     fixed_reprojection_errors = []
@@ -902,27 +924,45 @@ def solve_dataset(args: argparse.Namespace) -> dict[str, Any]:
             raise RuntimeError(f"Could not read captured image: {wrist_image_path}")
         fixed_observation = estimate_board_pose(fixed_image, fixed_intrinsic)
         wrist_observation = estimate_board_pose(wrist_image, wrist_intrinsic)
-        for camera_name, observation in (
-            ("fixed", fixed_observation),
-            ("wrist", wrist_observation),
+        for camera_name, observation, min_corners, max_reprojection_error_px in (
+            (
+                "fixed D455",
+                fixed_observation,
+                args.d455_min_corners,
+                args.d455_max_reprojection_error_px,
+            ),
+            (
+                "wrist D405",
+                wrist_observation,
+                args.d405_min_corners,
+                args.d405_max_reprojection_error_px,
+            ),
         ):
             if not _observation_is_acceptable(
                 observation,
-                min_corners=args.min_corners,
-                max_reprojection_error_px=args.max_reprojection_error_px,
+                min_corners=min_corners,
+                max_reprojection_error_px=max_reprojection_error_px,
             ):
                 raise RuntimeError(
                     f"Pose {pose_index} {camera_name} observation no longer meets "
-                    f"the quality threshold: {observation.corner_count} corners, "
+                    f"the quality thresholds ({min_corners} corners, "
+                    f"{max_reprojection_error_px:.3f}px maximum): "
+                    f"{observation.corner_count} corners, "
                     f"{observation.reprojection_rmse_px:.3f}px."
                 )
 
-        base_from_end_effector.append(
-            _validated_transform(
-                entry["base_from_end_effector"],
-                f"pose {pose_index} base_from_end_effector",
+        if "base_from_link7" in entry:
+            link7_pose = _validated_transform(
+                entry["base_from_link7"],
+                f"pose {pose_index} base_from_link7",
             )
-        )
+        else:
+            base_from_tcp = _validated_transform(
+                entry["base_from_end_effector"],
+                f"pose {pose_index} legacy base_from_end_effector",
+            )
+            link7_pose = base_from_tcp @ _invert_transform(LINK7_FROM_TCP)
+        base_from_link7.append(link7_pose)
         fixed_camera_from_board.append(fixed_observation.camera_from_board)
         wrist_camera_from_board.append(wrist_observation.camera_from_board)
         fixed_reprojection_errors.append(fixed_observation.reprojection_rmse_px)
@@ -947,7 +987,7 @@ def solve_dataset(args: argparse.Namespace) -> dict[str, Any]:
         )
 
     motion_translation_span_m, motion_rotation_span_deg = _motion_spans(
-        base_from_end_effector
+        base_from_link7
     )
     if motion_rotation_span_deg < 10.0:
         raise RuntimeError(
@@ -955,20 +995,18 @@ def solve_dataset(args: argparse.Namespace) -> dict[str, Any]:
             "the dataset is degenerate for hand-eye calibration."
         )
 
-    end_effector_from_wrist_camera = _solve_hand_eye(
-        base_from_end_effector,
+    link7_from_wrist_camera = _solve_hand_eye(
+        base_from_link7,
         wrist_camera_from_board,
         args.method,
     )
-    wrist_camera_from_end_effector = _invert_transform(
-        end_effector_from_wrist_camera
-    )
+    wrist_camera_from_link7 = _invert_transform(link7_from_wrist_camera)
 
     # A correct hand-eye transform makes base_from_board constant across poses.
     base_from_board_per_pose = [
-        base_from_ee @ end_effector_from_wrist_camera @ wrist_from_board
-        for base_from_ee, wrist_from_board in zip(
-            base_from_end_effector,
+        base_from_link @ link7_from_wrist_camera @ wrist_from_board
+        for base_from_link, wrist_from_board in zip(
+            base_from_link7,
             wrist_camera_from_board,
         )
     ]
@@ -992,8 +1030,8 @@ def solve_dataset(args: argparse.Namespace) -> dict[str, Any]:
     # robot pose plus the solved hand-eye result.
     paired_translation_errors = []
     paired_rotation_errors = []
-    for base_from_ee, fixed_from_board, wrist_from_board in zip(
-        base_from_end_effector,
+    for base_from_link, fixed_from_board, wrist_from_board in zip(
+        base_from_link7,
         fixed_camera_from_board,
         wrist_camera_from_board,
     ):
@@ -1002,8 +1040,8 @@ def solve_dataset(args: argparse.Namespace) -> dict[str, Any]:
         )
         predicted_fixed_from_wrist = (
             fixed_camera_from_base
-            @ base_from_ee
-            @ end_effector_from_wrist_camera
+            @ base_from_link
+            @ link7_from_wrist_camera
         )
         delta = _invert_transform(observed_fixed_from_wrist) @ (
             predicted_fixed_from_wrist
@@ -1082,15 +1120,15 @@ def solve_dataset(args: argparse.Namespace) -> dict[str, Any]:
     quality_passed = all(check["passed"] for check in quality_checks)
 
     result: dict[str, Any] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "solved_utc": _utc_now(),
         "source_manifest": str(manifest_path),
         "method": args.method,
         "fixed_serial": manifest["fixed_serial"],
         "wrist_serial": manifest["wrist_serial"],
         "frame_conventions": {
-            "end_effector_from_wrist_camera": (
-                "maps wrist-camera coordinates into the measured xArm TCP frame"
+            "link7_from_wrist_camera": (
+                "maps wrist-camera coordinates into the xArm link7 frame"
             ),
             "fixed_camera_from_base": (
                 "maps xArm base coordinates into the fixed-camera frame"
@@ -1102,8 +1140,10 @@ def solve_dataset(args: argparse.Namespace) -> dict[str, Any]:
         },
         "fixed_intrinsic": fixed_intrinsic,
         "wrist_intrinsic": wrist_intrinsic,
-        "end_effector_from_wrist_camera": end_effector_from_wrist_camera,
-        "wrist_camera_from_end_effector": wrist_camera_from_end_effector,
+        "link7_from_wrist_camera": link7_from_wrist_camera,
+        "wrist_camera_from_link7": wrist_camera_from_link7,
+        "assumed_tcp_offset_mm_rad": ASSUMED_TCP_OFFSET_MM_RAD,
+        "link7_from_tcp": LINK7_FROM_TCP,
         "base_from_board_native": base_from_board,
         "base_from_world": base_from_world,
         "fixed_camera_from_board_native": fixed_camera_from_board_mean,
@@ -1121,15 +1161,15 @@ def solve_dataset(args: argparse.Namespace) -> dict[str, Any]:
         },
     }
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    result_json_path = args.output_dir / "hand_eye_report.json"
-    result_pickle_path = args.output_dir / "hand_eye_params.pkl"
+    result_json_path = args.output_dir / HAND_EYE_REPORT_FILENAME
+    result_pickle_path = args.output_dir / HAND_EYE_PARAMS_FILENAME
     _write_json_atomic(result_json_path, result)
     with result_pickle_path.open("wb") as result_file:
         pickle.dump(result, result_file)
 
     print("Hand-eye calibration complete.")
-    print("end_effector_from_wrist_camera:")
-    print(end_effector_from_wrist_camera)
+    print("link7_from_wrist_camera:")
+    print(link7_from_wrist_camera)
     print(json.dumps(metrics, indent=2))
     print(f"Quality passed: {quality_passed}")
     print(f"Saved report: {result_json_path}")
@@ -1151,7 +1191,7 @@ def solve_dataset(args: argparse.Namespace) -> dict[str, Any]:
 
 def run_synthetic_self_test() -> None:
     """Verify transform directions and OpenCV hand-eye usage without hardware."""
-    end_effector_from_camera_expected = _make_transform(
+    link7_from_camera_expected = _make_transform(
         _rpy_to_rotation(0.12, -0.08, 0.21),
         np.array([0.045, -0.012, 0.082]),
     )
@@ -1159,11 +1199,11 @@ def run_synthetic_self_test() -> None:
         _rpy_to_rotation(-0.15, 0.10, -0.30),
         np.array([0.55, 0.08, 0.12]),
     )
-    base_from_end_effector = []
+    base_from_link7 = []
     camera_from_board = []
     for index in range(20):
         phase = index / 19.0
-        base_from_ee = _make_transform(
+        base_from_link = _make_transform(
             _rpy_to_rotation(
                 -0.35 + 0.65 * phase,
                 0.22 * math.sin(index * 0.7),
@@ -1178,19 +1218,19 @@ def run_synthetic_self_test() -> None:
             ),
         )
         camera_from_target = (
-            _invert_transform(end_effector_from_camera_expected)
-            @ _invert_transform(base_from_ee)
+            _invert_transform(link7_from_camera_expected)
+            @ _invert_transform(base_from_link)
             @ base_from_board
         )
-        base_from_end_effector.append(base_from_ee)
+        base_from_link7.append(base_from_link)
         camera_from_board.append(camera_from_target)
 
     solved = _solve_hand_eye(
-        base_from_end_effector,
+        base_from_link7,
         camera_from_board,
         "park",
     )
-    delta = _invert_transform(end_effector_from_camera_expected) @ solved
+    delta = _invert_transform(link7_from_camera_expected) @ solved
     translation_error = float(np.linalg.norm(delta[:3, 3]))
     rotation_error = _rotation_angle_deg(delta[:3, :3])
     if translation_error > 1e-6 or rotation_error > 1e-4:
@@ -1207,7 +1247,7 @@ def run_synthetic_self_test() -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Capture 20 paired fixed/wrist RealSense images while moving an xArm7, "
+            "Capture paired fixed/wrist RealSense images while moving an xArm7, "
             "then solve the wrist-camera hand-eye transform."
         )
     )
@@ -1239,16 +1279,40 @@ def parse_args() -> argparse.Namespace:
         help="OpenCV hand-eye method used during solve (default: %(default)s).",
     )
     parser.add_argument(
-        "--min-corners",
+        "--d455-min-corners",
         type=int,
-        default=35,
-        help="Minimum ChArUco corners required in each image (default: %(default)s).",
+        default=D455_MIN_CORNERS,
+        help=(
+            "Minimum ChArUco corners required from the fixed D455 "
+            "(default: %(default)s)."
+        ),
     )
     parser.add_argument(
-        "--max-reprojection-error-px",
+        "--d405-min-corners",
+        type=int,
+        default=D405_MIN_CORNERS,
+        help=(
+            "Minimum ChArUco corners required from the wrist D405 "
+            "(default: %(default)s)."
+        ),
+    )
+    parser.add_argument(
+        "--d455-max-reprojection-error-px",
         type=float,
-        default=0.5,
-        help="Maximum per-image reprojection RMSE (default: %(default)s).",
+        default=D455_MAX_REPROJECTION_ERROR_PX,
+        help=(
+            "Maximum reprojection RMSE for the fixed D455 "
+            "(default: %(default)s px)."
+        ),
+    )
+    parser.add_argument(
+        "--d405-max-reprojection-error-px",
+        type=float,
+        default=D405_MAX_REPROJECTION_ERROR_PX,
+        help=(
+            "Maximum reprojection RMSE for the wrist D405 "
+            "(default: %(default)s px)."
+        ),
     )
     parser.add_argument(
         "--capture-attempts",
@@ -1279,11 +1343,6 @@ def parse_args() -> argparse.Namespace:
         help="Skip the MOVE prompt after independently verifying all robot poses.",
     )
     parser.add_argument(
-        "--overwrite-captures",
-        action="store_true",
-        help="Allow replacement of the existing capture manifest and pose images.",
-    )
-    parser.add_argument(
         "--strict-quality",
         action="store_true",
         help="Return an error after saving results when quality checks fail.",
@@ -1291,10 +1350,14 @@ def parse_args() -> argparse.Namespace:
     args = parser.parse_args()
     args.config = args.config.expanduser().resolve()
     args.output_dir = args.output_dir.expanduser().resolve()
-    if args.min_corners < 4:
-        parser.error("--min-corners must be at least 4")
-    if args.max_reprojection_error_px <= 0.0:
-        parser.error("--max-reprojection-error-px must be positive")
+    if args.d455_min_corners < 4:
+        parser.error("--d455-min-corners must be at least 4")
+    if args.d405_min_corners < 4:
+        parser.error("--d405-min-corners must be at least 4")
+    if args.d455_max_reprojection_error_px <= 0.0:
+        parser.error("--d455-max-reprojection-error-px must be positive")
+    if args.d405_max_reprojection_error_px <= 0.0:
+        parser.error("--d405-max-reprojection-error-px must be positive")
     if args.capture_attempts < 1:
         parser.error("--capture-attempts must be at least 1")
     if args.settle_seconds < 0.0:

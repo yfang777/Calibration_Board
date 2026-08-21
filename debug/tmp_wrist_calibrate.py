@@ -5,11 +5,11 @@ remain fixed at the calibration-board world origin. The script first estimates
 the D405's world pose from several ChArUco detections. It then converts that
 world pose into the wrist camera's parent-body frame in MuJoCo and displays:
 
-    MuJoCo render | D405 image | absolute pixel difference
+    MuJoCo render | D405 image | 50/50 overlay
 
-The comparison is unwarped by default so it measures the calibrated camera
-directly. Pass ``--is-warp`` to apply an additional board-plane homography for
-diagnostic visualization.
+Pass ``--is-warp`` to map the D405 image into MuJoCo's intrinsic frame before
+blending. This uses only the two cameras' intrinsic matrices; it does not fit a
+transform from ChArUco correspondences.
 
 The calibrated pose is applied to the in-memory MuJoCo model only; this script
 does not modify xarm7_with_wrist.xml.
@@ -41,7 +41,9 @@ from digital_twin_camera.mujoco_sync import (  # noqa: E402
     WRIST_ROBOT_XML,
     RealSenseRgbCameras,
     assert_realsense_connected,
+    get_mj_cam,
     load_camera_serials,
+    warp_image,
     write_scene_xml,
 )
 
@@ -62,7 +64,7 @@ BOARD_MARKER_M = 0.022
 CAMERA_AXIS_FLIP = np.diag([1.0, -1.0, -1.0])
 
 CALIBRATION_WINDOW = "D405 ChArUco wrist calibration"
-COMPARISON_WINDOW = "Calibrated wrist camera: MuJoCo | D405 | difference"
+COMPARISON_WINDOW = "Calibrated wrist camera: MuJoCo | D405 | overlay"
 
 
 @dataclass(frozen=True)
@@ -76,8 +78,6 @@ class D405PoseCalibration:
     reprojection_error_px: float
     detected_corners: int
     sample_count: int
-    charuco_ids: np.ndarray
-    charuco_image_points: np.ndarray
 
     @property
     def camera_to_world(self) -> np.ndarray:
@@ -92,7 +92,10 @@ class CalibrationAborted(RuntimeError):
     """Raised when the user closes or cancels the calibration window."""
 
 
-def _make_charuco_detector() -> tuple[cv2.aruco.CharucoBoard, cv2.aruco.CharucoDetector]:
+def _make_charuco_detector() -> tuple[
+    cv2.aruco.CharucoBoard,
+    cv2.aruco.CharucoDetector,
+]:
     dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_5X5_250)
     board = cv2.aruco.CharucoBoard(
         size=BOARD_SIZE,
@@ -175,7 +178,6 @@ def calibrate_d405_pose(
     translations_world_to_camera: list[np.ndarray] = []
     accepted_errors: list[float] = []
     accepted_corner_counts: list[int] = []
-    image_points_by_id: dict[int, list[np.ndarray]] = {}
 
     if visualize:
         cv2.namedWindow(CALIBRATION_WINDOW, cv2.WINDOW_NORMAL)
@@ -184,8 +186,8 @@ def calibrate_d405_pose(
     try:
         while len(accepted_errors) < sample_count:
             color_bgr = camera.get_rgb()[serial]
-            charuco_corners, charuco_ids, marker_corners, marker_ids = detector.detectBoard(
-                color_bgr
+            charuco_corners, charuco_ids, marker_corners, marker_ids = (
+                detector.detectBoard(color_bgr)
             )
             detected_count = 0 if charuco_corners is None else len(charuco_corners)
             accepted = False
@@ -193,7 +195,7 @@ def calibrate_d405_pose(
             raw_rvec = None
             raw_tvec = None
 
-            if charuco_ids is not None and detected_count >= 4:
+            if charuco_ids is not None and detected_count >= min_corners:
                 ids = charuco_ids.reshape(-1).astype(np.int64)
                 object_points = np.ascontiguousarray(chessboard_corners[ids])
                 image_points = np.ascontiguousarray(charuco_corners, dtype=np.float32)
@@ -213,23 +215,20 @@ def calibrate_d405_pose(
                         distortion,
                     )
                     residual = projected.reshape(-1, 2) - image_points.reshape(-1, 2)
-                    error_px = float(np.sqrt(np.mean(np.sum(residual * residual, axis=1))))
-                    accepted = (
-                        detected_count >= min_corners
-                        and error_px <= max_reprojection_error_px
+                    error_px = float(
+                        np.sqrt(np.mean(np.sum(residual * residual, axis=1)))
                     )
+                    accepted = error_px <= max_reprojection_error_px
 
                 if accepted:
                     rotation_board_to_camera = cv2.Rodrigues(raw_rvec)[0]
-                    rotation_world_to_camera = rotation_board_to_camera @ CAMERA_AXIS_FLIP
+                    rotation_world_to_camera = (
+                        rotation_board_to_camera @ CAMERA_AXIS_FLIP
+                    )
                     rotations_world_to_camera.append(rotation_world_to_camera)
                     translations_world_to_camera.append(raw_tvec.reshape(3).copy())
                     accepted_errors.append(error_px)
                     accepted_corner_counts.append(detected_count)
-                    for corner_id, image_point in zip(ids, image_points.reshape(-1, 2)):
-                        image_points_by_id.setdefault(int(corner_id), []).append(
-                            image_point.astype(np.float64)
-                        )
 
             if visualize:
                 annotated = color_bgr.copy()
@@ -251,13 +250,20 @@ def calibrate_d405_pose(
 
                 progress = f"accepted {len(accepted_errors)}/{sample_count}"
                 if np.isfinite(error_px):
-                    quality = f"corners {detected_count}, reprojection RMSE {error_px:.3f} px"
+                    quality = (
+                        f"corners {detected_count}, "
+                        f"reprojection RMSE {error_px:.3f} px"
+                    )
                 else:
                     quality = f"corners {detected_count}, waiting for board"
                 status_color = (80, 255, 80) if accepted else (0, 220, 255)
                 _put_text(annotated, progress, (10, 25), 0.65, status_color)
                 _put_text(annotated, quality, (10, 52), 0.55, status_color)
-                _put_text(annotated, "Hold robot and board still | Esc cancels", (10, H - 15))
+                _put_text(
+                    annotated,
+                    "Hold robot and board still | Esc cancels",
+                    (10, H - 15),
+                )
                 cv2.imshow(CALIBRATION_WINDOW, annotated)
                 key = cv2.waitKey(1) & 0xFF
                 if key == 27 or _window_was_closed(CALIBRATION_WINDOW):
@@ -269,12 +275,6 @@ def calibrate_d405_pose(
     world_to_camera = np.eye(4, dtype=np.float64)
     world_to_camera[:3, :3] = _average_rotations(rotations_world_to_camera)
     world_to_camera[:3, 3] = np.mean(translations_world_to_camera, axis=0)
-    averaged_ids = np.array(sorted(image_points_by_id), dtype=np.int32)
-    averaged_image_points = np.array(
-        [np.mean(image_points_by_id[int(corner_id)], axis=0) for corner_id in averaged_ids],
-        dtype=np.float64,
-    )
-
     return D405PoseCalibration(
         serial=serial,
         intrinsic=intrinsic,
@@ -283,8 +283,6 @@ def calibrate_d405_pose(
         reprojection_error_px=float(np.mean(accepted_errors)),
         detected_corners=int(round(float(np.mean(accepted_corner_counts)))),
         sample_count=sample_count,
-        charuco_ids=averaged_ids,
-        charuco_image_points=averaged_image_points,
     )
 
 
@@ -342,130 +340,6 @@ def set_mujoco_camera_from_world_extrinsic(
     mujoco.mj_forward(model, data)
 
 
-def get_mujoco_camera_matrices(
-    model: mujoco.MjModel,
-    data: mujoco.MjData,
-    camera_id: int,
-    image_size: tuple[int, int] = (W, H),
-) -> tuple[np.ndarray, np.ndarray]:
-    """Return ``(intrinsic, world_to_cv_camera)`` for a MuJoCo camera."""
-    width, height = image_size
-    camera_rotation_world = data.cam_xmat[camera_id].reshape(3, 3)
-    rotation_world_to_cv_camera = CAMERA_AXIS_FLIP @ camera_rotation_world.T
-    camera_position_world = data.cam_xpos[camera_id]
-
-    world_to_camera = np.eye(4, dtype=np.float64)
-    world_to_camera[:3, :3] = rotation_world_to_cv_camera
-    world_to_camera[:3, 3] = -rotation_world_to_cv_camera @ camera_position_world
-
-    sensor_width, sensor_height = model.cam_sensorsize[camera_id]
-    focal_x, focal_y, principal_x, principal_y = model.cam_intrinsic[camera_id]
-
-
-    fx = (model.cam_intrinsic[camera_id][0] / model.cam_sensorsize[camera_id][0]
-          * model.cam_resolution[camera_id][0])
-    fy = (model.cam_intrinsic[camera_id][1] / model.cam_sensorsize[camera_id][1]
-          * model.cam_resolution[camera_id][1])
-    cx = (width - 1) / 2
-    cy = (height - 1) / 2
-    intrinsic = np.array([[fx, 0, cx],
-                       [0, fy, cy],
-                       [0,  0,  1]])
-    
-
-    # intrinsic = np.array(
-    #     [
-    #         [
-    #             focal_x / sensor_width * width,
-    #             0.0,
-    #             width / 2.0 + principal_x / sensor_width * width,
-    #         ],
-    #         [
-    #             0.0,
-    #             focal_y / sensor_height * height,
-    #             height / 2.0 - principal_y / sensor_height * height,
-    #         ],
-    #         [0.0, 0.0, 1.0],
-    #     ],
-    #     dtype=np.float64,
-    # )
-    return intrinsic, world_to_camera
-
-
-def _project_world_points(
-    world_points: np.ndarray,
-    intrinsic: np.ndarray,
-    world_to_camera: np.ndarray,
-) -> np.ndarray:
-    camera_points = (
-        world_to_camera[:3, :3] @ world_points.T
-        + world_to_camera[:3, 3, None]
-    ).T
-    if np.any(camera_points[:, 2] <= 0.0):
-        raise RuntimeError("At least one ChArUco corner is behind the MuJoCo camera.")
-    image_homogeneous = (intrinsic @ camera_points.T).T
-    return image_homogeneous[:, :2] / image_homogeneous[:, 2, None]
-
-
-def compute_real_to_mujoco_homography(
-    calibration: D405PoseCalibration,
-    model: mujoco.MjModel,
-    data: mujoco.MjData,
-    camera_id: int,
-    *,
-    ransac_threshold_px: float = 2.0,
-) -> tuple[np.ndarray, float, int]:
-    """Fit a real-image to MuJoCo-image warp on the ChArUco plane.
-
-    The destination points are projected with MuJoCo's current intrinsic and
-    extrinsic matrices. The source points are the averaged real D405 ChArUco
-    detections. Consequently, the fitted projective transform compensates for
-    residual intrinsic and extrinsic disagreement on the world-Z=0 board plane.
-    """
-    if len(calibration.charuco_ids) < 4:
-        raise RuntimeError(
-            "At least four calibrated ChArUco correspondences are required for warping."
-        )
-    if calibration.charuco_image_points.shape != (len(calibration.charuco_ids), 2):
-        raise ValueError("charuco_image_points must have shape (len(charuco_ids), 2).")
-
-    board, _ = _make_charuco_detector()
-    board_points = np.asarray(board.getChessboardCorners(), dtype=np.float64)
-    native_points = board_points[calibration.charuco_ids]
-    world_points = (CAMERA_AXIS_FLIP @ native_points.T).T
-
-    mujoco_intrinsic, mujoco_world_to_camera = get_mujoco_camera_matrices(
-        model, data, camera_id
-    )
-    simulated_image_points = _project_world_points(
-        world_points, mujoco_intrinsic, mujoco_world_to_camera
-    )
-    homography, inlier_mask = cv2.findHomography(
-        calibration.charuco_image_points,
-        simulated_image_points,
-        method=cv2.RANSAC,
-        ransacReprojThreshold=ransac_threshold_px,
-    )
-    if homography is None or not np.all(np.isfinite(homography)):
-        raise RuntimeError("OpenCV could not estimate the D405-to-MuJoCo homography.")
-    if abs(float(homography[2, 2])) < 1e-12:
-        raise RuntimeError("The D405-to-MuJoCo homography is singular.")
-    homography = homography / homography[2, 2]
-
-    warped_points = cv2.perspectiveTransform(
-        calibration.charuco_image_points.reshape(-1, 1, 2), homography
-    ).reshape(-1, 2)
-    residuals = np.linalg.norm(warped_points - simulated_image_points, axis=1)
-    if inlier_mask is None:
-        inliers = np.ones(len(residuals), dtype=bool)
-    else:
-        inliers = inlier_mask.reshape(-1).astype(bool)
-    if not np.any(inliers):
-        raise RuntimeError("The D405-to-MuJoCo homography has no inlier corners.")
-    reprojection_rmse_px = float(np.sqrt(np.mean(residuals[inliers] ** 2)))
-    return homography, reprojection_rmse_px, int(np.count_nonzero(inliers))
-
-
 def close_mujoco_gripper(model: mujoco.MjModel, data: mujoco.MjData) -> None:
     """Set the simulated xArm gripper qpos to fully closed."""
     for joint_name in GRIPPER_JOINT_NAMES:
@@ -510,99 +384,49 @@ def build_calibrated_mujoco_robot(
     return model, data, camera_id
 
 
-def _compose_difference_view(
+def _compose_overlay_view(
     sim_bgr: np.ndarray,
     real_bgr: np.ndarray,
     calibration: D405PoseCalibration,
     *,
     is_warp: bool = False,
-    real_to_mujoco_homography: np.ndarray | None = None,
-    warp_reprojection_rmse_px: float | None = None,
-    warp_inliers: int | None = None,
 ) -> np.ndarray:
     if sim_bgr.shape != real_bgr.shape:
         raise RuntimeError(
-            f"MuJoCo and D405 image shapes differ: {sim_bgr.shape} versus {real_bgr.shape}."
+            "MuJoCo and D405 image shapes differ: "
+            f"{sim_bgr.shape} versus {real_bgr.shape}."
         )
 
-    raw_difference = cv2.absdiff(sim_bgr, real_bgr)
-    if is_warp:
-        if real_to_mujoco_homography is None:
-            raise ValueError("A homography is required when is_warp is True.")
-        if warp_reprojection_rmse_px is None or warp_inliers is None:
-            raise ValueError("Warp fit metrics are required when is_warp is True.")
-
-        comparison_real = cv2.warpPerspective(
-            real_bgr,
-            real_to_mujoco_homography,
-            (W, H),
-            flags=cv2.INTER_LINEAR,
-            borderMode=cv2.BORDER_CONSTANT,
-        )
-        valid_mask = cv2.warpPerspective(
-            np.full((H, W), 255, dtype=np.uint8),
-            real_to_mujoco_homography,
-            (W, H),
-            flags=cv2.INTER_NEAREST,
-            borderMode=cv2.BORDER_CONSTANT,
-        ) > 0
-        if not np.any(valid_mask):
-            raise RuntimeError("The D405-to-MuJoCo warp has no valid output pixels.")
-        real_label = f"Warped D405 ({calibration.serial}) | board-plane correction"
-        difference_label = "Warped absolute difference"
-    else:
-        comparison_real = real_bgr
-        valid_mask = np.ones(real_bgr.shape[:2], dtype=bool)
-        real_label = f"Unwarped D405 ({calibration.serial}) | intrinsic + extrinsic"
-        difference_label = "Unwarped absolute difference"
-
-    difference = cv2.absdiff(sim_bgr, comparison_real)
-    difference[~valid_mask] = 0
-    raw_mean_absolute_error = float(np.mean(raw_difference[valid_mask]))
-    mean_absolute_error = float(np.mean(difference[valid_mask]))
     sim_panel = sim_bgr.copy()
-    real_panel = comparison_real.copy()
-    difference_panel = difference.copy()
+    real_panel = real_bgr.copy()
+    overlay_panel = cv2.addWeighted(sim_bgr, 0.5, real_bgr, 0.5, 0.0)
+    real_prefix = "Intrinsic-warped" if is_warp else "Raw"
     _put_text(sim_panel, "MuJoCo calibrated wrist_camera", (10, 25), 0.62)
-    _put_text(real_panel, real_label, (10, 25), 0.54)
     _put_text(
-        difference_panel,
-        f"{difference_label} | mean {mean_absolute_error:.1f}",
+        real_panel,
+        f"{real_prefix} D405 ({calibration.serial})",
         (10, 25),
-        0.56,
+        0.62,
     )
+    _put_text(overlay_panel, "MuJoCo / D405 50/50 overlay", (10, 25), 0.62)
 
-    panels = np.hstack((sim_panel, real_panel, difference_panel))
+    panels = np.hstack((sim_panel, real_panel, overlay_panel))
     footer = np.zeros((66, panels.shape[1], 3), dtype=np.uint8)
     display = np.vstack((panels, footer))
     position = " ".join(f"{value:.5f}" for value in calibration.position_world)
     joints = " ".join(f"{value:g}" for value in ROBOT_JOINTS_DEG)
-    if is_warp:
-        assert warp_reprojection_rmse_px is not None
-        assert warp_inliers is not None
-        footer_line_one = (
-            f"D405 world position: [{position}] m | calibration RMSE: "
-            f"{calibration.reprojection_error_px:.3f} px | warp fit: "
-            f"{warp_reprojection_rmse_px:.3f} px ({warp_inliers} corners)"
-        )
-        footer_line_two = (
-            f"Pixel MAE raw -> warped: {raw_mean_absolute_error:.1f} -> "
-            f"{mean_absolute_error:.1f} | joints: [{joints}] | Esc exits"
-        )
-    else:
-        footer_line_one = (
-            f"D405 world position: [{position}] m | calibration RMSE: "
-            f"{calibration.reprojection_error_px:.3f} px | direct unwarped comparison"
-        )
-        footer_line_two = (
-            f"Pixel MAE: {mean_absolute_error:.1f} | joints: [{joints}] | Esc exits"
-        )
+    footer_line_one = (
+        f"D405 world position: [{position}] m | calibration RMSE: "
+        f"{calibration.reprojection_error_px:.3f} px | "
+        f"{'intrinsic warp' if is_warp else 'no warp'}"
+    )
+    footer_line_two = f"Joints: [{joints}] | Esc exits"
     _put_text(display, footer_line_one, (10, H + 27), 0.48)
     _put_text(display, footer_line_two, (10, H + 55), 0.49)
     return display
 
 
-def visualize_real_sim_difference(
+def visualize_real_sim_overlay(
     camera: RealSenseRgbCameras,
     calibration: D405PoseCalibration,
     model: mujoco.MjModel,
@@ -610,29 +434,20 @@ def visualize_real_sim_difference(
     *,
     is_warp: bool = False,
 ) -> None:
-    """Show MuJoCo, D405, and difference views, optionally using a plane warp."""
+    """Show MuJoCo, D405, and their overlay with optional intrinsic warping."""
     renderer = mujoco.Renderer(model, height=H, width=W)
     try:
-        real_to_mujoco_homography = None
-        warp_rmse_px = None
-        warp_inliers = None
+        mujoco_intrinsic = None
         if is_warp:
-            camera_id = mujoco.mj_name2id(
-                model, mujoco.mjtObj.mjOBJ_CAMERA, WRIST_CAMERA_NAME
+            _, mujoco_intrinsic = get_mj_cam(
+                model,
+                data,
+                WRIST_CAMERA_NAME,
+                W,
+                H,
             )
-            real_to_mujoco_homography, warp_rmse_px, warp_inliers = (
-                compute_real_to_mujoco_homography(
-                    calibration, model, data, camera_id
-                )
-            )
-            print("D405 image-to-MuJoCo plane homography:")
-            print(real_to_mujoco_homography)
-            print(
-                f"Homography fit RMSE: {warp_rmse_px:.4f} px "
-                f"using {warp_inliers} ChArUco corners"
-            )
-        else:
-            print("Comparing unwarped D405 and MuJoCo images.")
+        mode = "intrinsic-warped" if is_warp else "unwarped"
+        print(f"Showing a 50/50 {mode} D405 and MuJoCo overlay.")
 
         renderer.update_scene(data, camera=WRIST_CAMERA_NAME)
         sim_bgr = cv2.cvtColor(renderer.render(), cv2.COLOR_RGB2BGR)
@@ -641,14 +456,18 @@ def visualize_real_sim_difference(
         cv2.resizeWindow(COMPARISON_WINDOW, W * 3, H + 66)
         while True:
             real_bgr = camera.get_rgb()[calibration.serial]
-            display = _compose_difference_view(
+            if mujoco_intrinsic is not None:
+                real_bgr = warp_image(
+                    real_bgr,
+                    calibration.intrinsic,
+                    mujoco_intrinsic,
+                    (W, H),
+                )
+            display = _compose_overlay_view(
                 sim_bgr,
                 real_bgr,
                 calibration,
                 is_warp=is_warp,
-                real_to_mujoco_homography=real_to_mujoco_homography,
-                warp_reprojection_rmse_px=warp_rmse_px,
-                warp_inliers=warp_inliers,
             )
             cv2.imshow(COMPARISON_WINDOW, display)
             key = cv2.waitKey(1) & 0xFF
@@ -664,7 +483,7 @@ def parse_args() -> argparse.Namespace:
         description=(
             "Calibrate the configured wrist D405 against the ChArUco board, "
             "apply the result to MuJoCo at the configured robot pose, and show "
-            "the real/sim pixel difference."
+            "a direct real/sim overlay."
         )
     )
     parser.add_argument(
@@ -688,10 +507,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--is-warp",
         action="store_true",
-        help=(
-            "Warp the D405 image to the MuJoCo view with a board-plane homography; "
-            "the default compares the calibrated images without a warp."
-        ),
+        help="Warp D405 intrinsics into the MuJoCo image frame before overlaying.",
     )
     return parser.parse_args()
 
@@ -724,7 +540,7 @@ def main() -> None:
         )
 
         model, data, _ = build_calibrated_mujoco_robot(calibration)
-        visualize_real_sim_difference(
+        visualize_real_sim_overlay(
             camera,
             calibration,
             model,

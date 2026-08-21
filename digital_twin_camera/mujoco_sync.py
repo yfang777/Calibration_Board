@@ -15,15 +15,24 @@ from pathlib import Path
 import cv2
 import mujoco
 import numpy as np
-import pyrealsense2 as rs
 import pyvista as pv
-import yaml
 
 from digital_twin_camera import utils
+from digital_twin_camera.cameras import (
+    H,
+    W,
+    RealSenseRgbCameras,
+    assert_realsense_connected,
+    connected_realsense_ids,
+    load_camera_serials,
+    resize_like,
+    warp_image,
+)
 from digital_twin_camera.robot_env import Xarm7Env
 
+_apply_warp = warp_image
+
 REPO = Path(__file__).resolve().parent.parent
-CONFIG_PATH = REPO / "config.yaml"
 CAM_PARAMS_PATH = REPO / "data/calib_params/cam_params.pkl"
 MJ_XML_DIR = REPO / "assets/mujoco_xml"
 CAMERA_XML = MJ_XML_DIR / "camera.xml"
@@ -31,39 +40,11 @@ SCENE_XML = MJ_XML_DIR / "scene.xml"
 DEFAULT_ROBOT_XML = REPO / "assets/robot/xarm7/xarm7_with_gripper.xml"
 WRIST_ROBOT_XML = REPO / "assets/robot/xarm7/xarm7_with_wrist.xml"
 
-W, H = 640, 480
-FPS = 30
 WRIST_CAMERA_NAME = "wrist_camera"
 
 # Charuco board parameters (must match calibrator.py)
 BOARD_SIZE = (12, 9)   # (cols, rows) — number of squares
 BOARD_SQUARE = 0.03    # square edge length in meters
-
-
-def load_camera_serials() -> tuple[list[str], str]:
-    with CONFIG_PATH.open("r", encoding="utf-8") as f:
-        config = yaml.safe_load(f)
-
-    fixed_rs_ids = [str(rs_id) for rs_id in config["rs_id"]["d455"].values()]
-    wrist_rs_id = str(config["rs_id"]["d405"]["cam_1"])
-    return fixed_rs_ids, wrist_rs_id
-
-
-def connected_realsense_ids() -> set[str]:
-    context = rs.context()
-    return {
-        device.get_info(rs.camera_info.serial_number)
-        for device in context.query_devices()
-    }
-
-
-def assert_realsense_connected(rs_ids: list[str]) -> None:
-    connected_rs_ids = connected_realsense_ids()
-    for rs_id in rs_ids:
-        assert rs_id in connected_rs_ids, (
-            f"RealSense {rs_id} is not connected. "
-            f"Connected serials: {sorted(connected_rs_ids)}"
-        )
 
 
 def select_robot_xml(wrist_rs_id: str, connected_rs_ids: set[str] | None = None) -> tuple[Path, bool]:
@@ -262,89 +243,6 @@ def render_mj_rgb(model, data, camera_name: str) -> np.ndarray:
     return rgb_bgr
 
 
-def warp_image(rgb_rs: np.ndarray, K_rs: np.ndarray, K_mj: np.ndarray,
-               size: tuple[int, int] = (W, H)) -> np.ndarray:
-    """Warp a RealSense image into the MuJoCo camera's intrinsic frame via H = K_mj @ K_rs^{-1}."""
-    H_rs_to_mj = (K_mj @ np.linalg.inv(K_rs)).astype(np.float32)
-    return cv2.warpPerspective(rgb_rs, H_rs_to_mj, size, flags=cv2.INTER_LINEAR)
-
-
-_apply_warp = warp_image  # alias so test_mujoco_rgb can use it even when shadowed by an arg name
-
-
-def _resize_like(image: np.ndarray, reference: np.ndarray) -> np.ndarray:
-    """Resize image to reference HxW if needed."""
-    ref_h, ref_w = reference.shape[:2]
-    if image.shape[:2] == (ref_h, ref_w):
-        return image
-    return cv2.resize(image, (ref_w, ref_h), interpolation=cv2.INTER_LINEAR)
-
-
-class RealSenseRgbCameras:
-    """Same-process RealSense RGB capture for the live RGB alignment view."""
-
-    def __init__(self, rs_ids, wrist_rs_id, frame_timeout_ms=15000):
-        self.rs_ids = list(rs_ids)
-        self.wrist_rs_id = wrist_rs_id
-        self.frame_timeout_ms = frame_timeout_ms
-        self.pipes: dict[str, rs.pipeline] = {}
-        self.intrinsics: dict[str, np.ndarray] = {}
-        self.color_formats: dict[str, rs.format] = {}
-
-    def start(self):
-        assert_realsense_connected(self.rs_ids)
-
-        try:
-            for rs_id in self.rs_ids:
-                if rs_id == self.wrist_rs_id:
-                    color_format = rs.format.rgb8
-                else:
-                    color_format = rs.format.bgr8
-
-                pipe = rs.pipeline()
-                cfg = rs.config()
-                cfg.enable_device(rs_id)
-                cfg.enable_stream(rs.stream.color, W, H, color_format, FPS)
-                profile = pipe.start(cfg)
-                self.pipes[rs_id] = pipe
-                stream = profile.get_stream(rs.stream.color).as_video_stream_profile()
-                intr = stream.get_intrinsics()
-                intrinsic = np.array(
-                    [[intr.fx, 0.0, intr.ppx], [0.0, intr.fy, intr.ppy], [0.0, 0.0, 1.0]],
-                    dtype=np.float64,
-                )
-
-                self.intrinsics[rs_id] = intrinsic
-                self.color_formats[rs_id] = color_format
-
-            for _ in range(5):
-                self.get_rgb()
-        except Exception:
-            self.close()
-            raise
-        return self
-
-    def get_rgb(self) -> dict[str, np.ndarray]:
-        images = {}
-        for rs_id in self.rs_ids:
-            frames = self.pipes[rs_id].wait_for_frames(self.frame_timeout_ms)
-            color_frame = frames.get_color_frame()
-            if not color_frame:
-                raise RuntimeError(f"No color frame from RealSense {rs_id}")
-            color = np.asanyarray(color_frame.get_data())
-            if self.color_formats[rs_id] == rs.format.rgb8:
-                color = cv2.cvtColor(color, cv2.COLOR_RGB2BGR)
-            images[rs_id] = color.copy()
-        return images
-
-    def close(self):
-        for pipe in self.pipes.values():
-            pipe.stop()
-        self.pipes.clear()
-        self.intrinsics.clear()
-        self.color_formats.clear()
-
-
 # --- main ----------------------------------------------------------------
 
 def main():
@@ -466,9 +364,14 @@ def test_mujoco_rgb(include_robot: bool = True, warp_image: bool = True):
                 sim = sim_images[rs_id]
                 real = obs[rs_id]
                 if warp_image:
-                    real = _apply_warp(real, K_real_by_rs[rs_id], K_mj_by_rs[rs_id], (W, H))
+                    real = _apply_warp(
+                        real,
+                        K_real_by_rs[rs_id],
+                        K_mj_by_rs[rs_id],
+                        (W, H),
+                    )
                 else:
-                    real = _resize_like(real, sim)
+                    real = resize_like(real, sim)
                 overlay = cv2.addWeighted(sim, 0.5, real, 0.5, 0.0)
 
                 rows.append(

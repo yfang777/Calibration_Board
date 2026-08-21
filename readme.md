@@ -52,3 +52,14 @@ The script generates the following outputs:
         *   Each entry contains:
             *   `"extrinsic"`: 4x4 Transformation Matrix (Board -> Camera).
             *   `"intrinsic"`: 3x3 Camera Intrinsic Matrix.
+
+
+Hang_Eye: 
+* Mathematics: $$T^{base}_{board} = T^{base}_{ee} x T^{ee}_{wrist} x T^{wrist}_{board} $$.
+* Eliminate $T^{base}_{board}$ and calculate $T^{ee}_{wrist}$ through averaging 20 times.
+* Convention: World_Frame is set to Robot_base.
+
+
+Regarding get_position: yes, it is the right pose source for hand-eye calibration, and calibrator_hand_eye.py:468 already
+  records it for every accepted capture. I recommend keeping that instead of deriving the TCP pose from joint angles and MuJoCo
+  FK. The current FK comparison showed discrepancies up to 5.70 mm and 1.883°.
