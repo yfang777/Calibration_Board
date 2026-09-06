@@ -9,18 +9,27 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from digital_twin_camera.cameras import RealSenseRgbCameras
+from digital_twin_camera.cameras import RealSenseRgbCameras, load_camera_serials
 
 
 REPO = Path(__file__).resolve().parent
 CAM_PARAMS_WRIST_PATH = REPO / "data/calib_params/cam_params_wrist.pkl"
 
+# W = 640
+# H = 480
+# MAX_REPROJECTION_ERROR_PX = 0.35
+W = 1280
+H = 720
+# MAX_REPROJECTION_ERROR_PX = 0.45
 BOARD_SIZE = (12, 9)
 BOARD_SQUARE_M = 0.03
 BOARD_MARKER_M = 0.022
 BOARD_FROM_WORLD = np.diag([1.0, -1.0, -1.0])
 
 CALIBRATION_WINDOW = "D405 ChArUco wrist calibration"
+SAMPLE_COUNT = 10
+MIN_CORNERS = 35
+MAX_REPROJECTION_ERROR_PX = 0.35
 
 
 @dataclass(frozen=True)
@@ -100,9 +109,9 @@ def _window_was_closed(window_name: str) -> bool:
 def calibrate_wrist_camera(
     camera: RealSenseRgbCameras,
     *,
-    sample_count: int = 10,
-    min_corners: int = 35,
-    max_reprojection_error_px: float = 0.2,
+    sample_count: int = SAMPLE_COUNT,
+    min_corners: int = MIN_CORNERS,
+    max_reprojection_error_px: float = MAX_REPROJECTION_ERROR_PX,
     visualize: bool = True,
 ) -> WristCameraCalibration:
     """Estimate the wrist D405 pose in the calibration-board world frame.
@@ -257,7 +266,12 @@ def save_wrist_camera_params(
 
 
 def main() -> None:
-    camera = RealSenseRgbCameras.configured_wrist()
+    _, wrist_rs_id = load_camera_serials()
+    camera = RealSenseRgbCameras(
+        [wrist_rs_id],
+        wrist_rs_id,
+        image_size=(W, H),
+    )
     try:
         camera.start()
         calibration = calibrate_wrist_camera(camera)

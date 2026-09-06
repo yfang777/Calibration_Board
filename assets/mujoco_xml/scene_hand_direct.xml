@@ -1,5 +1,8 @@
 <mujoco model="wrist_camera_calibration">
   <include file="../robot/xarm7/xarm7_with_wrist_direct.xml" />
+  <visual>
+    <global offwidth="1280" offheight="720" />
+  </visual>
   <worldbody>
     <geom name="floor" type="plane" pos="0 0 -0.005" size="1 1 0.01" rgba="0.85 0.85 0.85 1" />
     <site name="charuco_0_0" pos="0.0000 0.0000 0" size="0.003" rgba="1 0 0 1" group="2" />

@@ -14,8 +14,6 @@ import numpy as np
 
 from digital_twin_camera import utils
 from digital_twin_camera.cameras import (
-    H,
-    W,
     RealSenseRgbCameras,
     load_camera_serials,
     resize_like,
@@ -29,6 +27,10 @@ MJ_XML_DIR = REPO / "assets/mujoco_xml"
 SCENE_XML = MJ_XML_DIR / "scene_hand_direct.xml"
 WRIST_ROBOT_XML = REPO / "assets/robot/xarm7/xarm7_with_wrist_direct.xml"
 
+# W = 640
+# H = 480
+W = 1280
+H = 720
 WRIST_CAMERA_NAME = "wrist_camera"
 LINK7_BODY_NAME = "link7"
 # ROBOT_JOINTS_DEG = (0., -45.0, 0.0, 30, 0., 75, 0.0)
@@ -120,6 +122,12 @@ def _new_scene_tree(
         root,
         "include",
         {"file": os.path.relpath(robot_xml, scene_xml.parent)},
+    )
+    visual = ET.SubElement(root, "visual")
+    ET.SubElement(
+        visual,
+        "global",
+        {"offwidth": str(W), "offheight": str(H)},
     )
     worldbody = ET.SubElement(root, "worldbody")
     ET.SubElement(
@@ -337,7 +345,12 @@ def test_mujoco_rgb(
         raise RuntimeError(f"MuJoCo camera {WRIST_CAMERA_NAME!r} was not found.")
 
     renderer = mujoco.Renderer(model, height=H, width=W)
-    real_camera = RealSenseRgbCameras.configured_wrist()
+    _, wrist_rs_id = load_camera_serials()
+    real_camera = RealSenseRgbCameras(
+        [wrist_rs_id],
+        wrist_rs_id,
+        image_size=(W, H),
+    )
     try:
         real_camera.start()
         serial = real_camera.wrist_rs_id
@@ -400,4 +413,4 @@ def test_write_scene_xml(
 
 if __name__ == "__main__":
     test_write_scene_xml()
-    test_mujoco_rgb()
+    test_mujoco_rgb(is_warp=True)
