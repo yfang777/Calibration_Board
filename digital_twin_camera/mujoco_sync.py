@@ -1,4 +1,4 @@
-"""Compare MuJoCo digital-twin cameras against real RealSense cameras.
+"""Compare MuJoCo digital-twin cameras against fixed D455 cameras.
 
 For each rs_id in cam_params.pkl:
   - convert (extrinsic, intrinsic) -> MJCF <camera>
@@ -22,8 +22,6 @@ from digital_twin_camera.cameras import (
     H,
     W,
     RealSenseRgbCameras,
-    assert_realsense_connected,
-    connected_realsense_ids,
     load_camera_serials,
     resize_like,
     warp_image,
@@ -34,25 +32,25 @@ _apply_warp = warp_image
 
 REPO = Path(__file__).resolve().parent.parent
 CAM_PARAMS_PATH = REPO / "data/calib_params/cam_params.pkl"
-MJ_XML_DIR = REPO / "assets/mujoco_xml"
+D455_XML_DIR = REPO / "assets/mujoco_xml/D455"
+MJ_XML_DIR = D455_XML_DIR
 CAMERA_XML = MJ_XML_DIR / "camera.xml"
 SCENE_XML = MJ_XML_DIR / "scene.xml"
-DEFAULT_ROBOT_XML = REPO / "assets/robot/xarm7/xarm7_with_gripper.xml"
-WRIST_ROBOT_XML = REPO / "assets/robot/xarm7/xarm7_with_wrist.xml"
-
-WRIST_CAMERA_NAME = "wrist_camera"
+ROBOT_XML_DIR = REPO.parent / "Codegen_Datagen/assets/xarm7_gripper"
+ROBOT_W_WRIST_XML = ROBOT_XML_DIR / "xarm7_w_wrist.xml"
+ROBOT_WO_WRIST_XML = ROBOT_XML_DIR / "xarm7_wo_wrist.xml"
+ROBOT = "xarm7_w_wrist.xml"
 
 # Charuco board parameters (must match calibrator.py)
 BOARD_SIZE = (12, 9)   # (cols, rows) — number of squares
 BOARD_SQUARE = 0.03    # square edge length in meters
 
 
-def select_robot_xml(wrist_rs_id: str, connected_rs_ids: set[str] | None = None) -> tuple[Path, bool]:
-    if connected_rs_ids is None:
-        connected_rs_ids = connected_realsense_ids()
-    use_wrist_robot = wrist_rs_id in connected_rs_ids
-    robot_xml = WRIST_ROBOT_XML if use_wrist_robot else DEFAULT_ROBOT_XML
-    return robot_xml, use_wrist_robot
+def select_robot_xml(robot: str = ROBOT) -> Path:
+    return {
+        ROBOT_W_WRIST_XML.name: ROBOT_W_WRIST_XML,
+        ROBOT_WO_WRIST_XML.name: ROBOT_WO_WRIST_XML,
+    }[robot]
 
 
 # --- camera conversion ---------------------------------------------------
@@ -122,12 +120,6 @@ def get_mj_cam(model, data, camera_name, width, height):
           * model.cam_resolution[camera_id][0])
     fy = (model.cam_intrinsic[camera_id][1] / model.cam_sensorsize[camera_id][1]
           * model.cam_resolution[camera_id][1])
-    # if camera_name == WRIST_CAMERA_NAME:
-    #     principal_x, principal_y = model.cam_intrinsic[camera_id][2:4]
-    #     sensor_width, sensor_height = model.cam_sensorsize[camera_id]
-    #     cx = width / 2 + principal_x / sensor_width * width
-    #     cy = height / 2 - principal_y / sensor_height * height
-    # else:
     cx = (width - 1) / 2
     cy = (height - 1) / 2
     in_mat = np.array([[fx, 0, cx],
@@ -153,7 +145,11 @@ def write_camera_xml(cam_params: dict) -> None:
     )
 
 
-def write_scene_xml(include_robot: bool = True, robot_xml: Path = DEFAULT_ROBOT_XML) -> None:
+def write_scene_xml(
+    include_robot: bool = True,
+    robot_xml: Path = ROBOT_W_WRIST_XML,
+) -> None:
+    MJ_XML_DIR.mkdir(parents=True, exist_ok=True)
     robot_rel = os.path.relpath(robot_xml, MJ_XML_DIR)
     cam_rel = CAMERA_XML.name
 
@@ -245,12 +241,13 @@ def render_mj_rgb(model, data, camera_name: str) -> np.ndarray:
 
 # --- main ----------------------------------------------------------------
 
-def main():
+def main(robot: str = ROBOT):
     with open(CAM_PARAMS_PATH, "rb") as f:
         cam_params = pickle.load(f)
 
-    _, wrist_rs_id = load_camera_serials()
-    robot_xml, _ = select_robot_xml(wrist_rs_id)
+    fixed_rs_ids, _ = load_camera_serials()
+    cam_params = {rs_id: cam_params[rs_id] for rs_id in fixed_rs_ids}
+    robot_xml = select_robot_xml(robot)
     write_camera_xml(cam_params)
     write_scene_xml(robot_xml=robot_xml)
 
@@ -300,7 +297,11 @@ def main():
 
 # --- tests ---------------------------------------------------------------
 
-def test_mujoco_rgb(include_robot: bool = True, warp_image: bool = True):
+def test_mujoco_rgb(
+    include_robot: bool = True,
+    warp_image: bool = True,
+    robot: str = ROBOT,
+):
     """Render MuJoCo RGB, capture RealSense RGB, and show an N x 3 grid:
        columns = sim | real | overlay, rows = scene cameras.
 
@@ -308,11 +309,12 @@ def test_mujoco_rgb(include_robot: bool = True, warp_image: bool = True):
     via H = K_mj @ K_rs^{-1} before overlaying.
 
     Fixed D455 cameras use names of the form camera_<realsense_serial>.
-    The robot-mounted D405 uses the MuJoCo camera name wrist_camera and the
-    D405 serial configured in config.yaml.
     """
     fixed_rs_ids, wrist_rs_id = load_camera_serials()
-    robot_xml, use_wrist_robot = select_robot_xml(wrist_rs_id)
+    with open(CAM_PARAMS_PATH, "rb") as f:
+        cam_params = pickle.load(f)
+    write_camera_xml({rs_id: cam_params[rs_id] for rs_id in fixed_rs_ids})
+    robot_xml = select_robot_xml(robot)
     write_scene_xml(include_robot=include_robot, robot_xml=robot_xml)
     print(f"Using robot model: {robot_xml.name}")
 
@@ -324,8 +326,6 @@ def test_mujoco_rgb(include_robot: bool = True, warp_image: bool = True):
         mujoco.mj_forward(model, data)
 
     cameras = [(f"camera_{rs_id}", rs_id) for rs_id in fixed_rs_ids]
-    if include_robot and use_wrist_robot:
-        cameras.append((WRIST_CAMERA_NAME, wrist_rs_id))
 
     for camera_name, _ in cameras:
         camera_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, camera_name)
@@ -396,7 +396,10 @@ def test_mujoco_rgb(include_robot: bool = True, warp_image: bool = True):
 
 
 
-def test_mujoco_pointcloud(warp_image: bool = True):
+def test_mujoco_pointcloud(
+    warp_image: bool = True,
+    robot: str = ROBOT,
+):
     """Sweep through SIM_POSES_DEG: drive the real arm + sim to each pose, lift
     sim and real depth into world-frame point clouds, and overlay them.
 
@@ -412,8 +415,10 @@ def test_mujoco_pointcloud(warp_image: bool = True):
     with open(CAM_PARAMS_PATH, "rb") as f:
         cam_params = pickle.load(f)
 
-    _, wrist_rs_id = load_camera_serials()
-    robot_xml, _ = select_robot_xml(wrist_rs_id)
+    fixed_rs_ids, _ = load_camera_serials()
+    cam_params = {rs_id: cam_params[rs_id] for rs_id in fixed_rs_ids}
+    robot_xml = select_robot_xml(robot)
+    write_camera_xml(cam_params)
     write_scene_xml(robot_xml=robot_xml)
 
     model = mujoco.MjModel.from_xml_path(str(SCENE_XML))

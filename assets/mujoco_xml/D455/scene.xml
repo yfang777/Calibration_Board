@@ -1,5 +1,5 @@
 <mujoco model="digital_twin">
-  <include file="../robot/xarm7/xarm7_with_wrist_tmp.xml"/>
+  <include file="../../../../Codegen_Datagen/assets/xarm7_gripper/xarm7_w_wrist.xml"/>
   <include file="camera.xml"/>
   <worldbody>
     <geom name="floor" type="plane" pos="0 0 -0.005" size="1 1 0.01" rgba="0.85 0.85 0.85 1"/>

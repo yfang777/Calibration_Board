@@ -92,7 +92,7 @@ class RealSenseRgbCameras:
     @classmethod
     def configured_wrist(cls) -> RealSenseRgbCameras:
         _, wrist_rs_id = load_camera_serials()
-        return cls([wrist_rs_id], wrist_rs_id)
+        return cls([wrist_rs_id], wrist_rs_id, image_size=(1280, 720))
 
     def start(self) -> RealSenseRgbCameras:
         assert_realsense_connected(self.rs_ids)

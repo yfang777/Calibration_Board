@@ -23,7 +23,7 @@ from digital_twin_camera.cameras import (
 
 REPO = Path(__file__).resolve().parent.parent
 CAM_PARAMS_WRIST_PATH = REPO / "data/calib_params/cam_params_wrist.pkl"
-MJ_XML_DIR = REPO / "assets/mujoco_xml"
+MJ_XML_DIR = REPO / "assets/mujoco_xml/D405_direct"
 SCENE_XML = MJ_XML_DIR / "scene_hand_direct.xml"
 WRIST_ROBOT_XML = REPO / "assets/robot/xarm7/xarm7_with_wrist_direct.xml"
 

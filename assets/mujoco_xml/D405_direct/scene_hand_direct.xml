@@ -1,5 +1,5 @@
 <mujoco model="wrist_camera_calibration">
-  <include file="../robot/xarm7/xarm7_with_wrist_direct.xml" />
+  <include file="../../robot/xarm7/xarm7_with_wrist_direct.xml" />
   <visual>
     <global offwidth="1280" offheight="720" />
   </visual>
