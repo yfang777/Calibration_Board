@@ -42,6 +42,27 @@ The script performs the following steps:
 
 ## Outputs
 
+### D405 direct calibration and overlay
+
+The direct wrist workflow undistorts RGB using the stream's RealSense distortion
+model before detecting ChArUco corners or displaying the image. The rectified
+image retains the original intrinsic matrix; zero distortion in `solvePnP` is
+therefore intentional. The overlay then applies `K_mujoco @ inv(K_real)`.
+This intrinsic mapping applies at every depth when camera poses match.
+
+Recalibrate after updating: old wrist poses were fitted to distorted images and
+are rejected by the direct overlay. Hold the robot and board still, with the
+robot at `ROBOT_JOINTS_DEG` in `digital_twin_camera/mujoco_sync_wrist_direct.py`:
+
+```bash
+python calibrator_wrist_direct.py
+python -m digital_twin_camera.mujoco_sync_wrist_direct
+```
+
+The second command regenerates the camera XML from the new pose. Other camera
+workflows retain their existing capture behavior. The direct overlay's unwarped
+mode now shows an undistorted image, rather than raw sensor pixels.
+
 The script generates the following outputs:
 
 *   **Visualizations:** Saved in `./data/calibration_vis/`

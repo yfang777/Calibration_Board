@@ -162,7 +162,7 @@
                         <geom material="black" mesh="right_inner_knuckle" name="right_inner_knuckle" />
                       </body>
                     </body>
-                    <camera name="wrist_camera" mode="fixed" pos="0.070678329635 -0.0157264404093 0.0633413681297" quat="0.112780221376 0.705350101051 0.690488596569 0.113962075366" focal="0.00193 0.00193" resolution="1280 720" sensorsize="0.003896 0.00214" />
+                    <camera name="wrist_camera" mode="fixed" pos="0.0745042828043 -0.0123387860164 0.0647661160585" quat="0.111602930767 0.70423194322 0.69125604457 0.117333869101" focal="0.00193 0.00193" resolution="1280 720" sensorsize="0.003896 0.00214" />
                   </body>
                 </body>
               </body>

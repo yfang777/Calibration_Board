@@ -1,0 +1,140 @@
+<mujoco model="039_mug_1">
+  <asset>
+    <mesh name="039_mug_1_mesh" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/measured_mug.obj" />
+    <texture name="039_mug_1_texture" type="2d" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/material_0.png" />
+    <material name="039_mug_1_material" texture="039_mug_1_texture" specular="0.35" shininess="0.25" />
+    <mesh name="039_mug_1_part_0" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/decomposed/meshy_green_mug_collision_000.obj" />
+    <mesh name="039_mug_1_part_1" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/decomposed/meshy_green_mug_collision_001.obj" />
+    <mesh name="039_mug_1_part_2" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/decomposed/meshy_green_mug_collision_002.obj" />
+    <mesh name="039_mug_1_part_3" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/decomposed/meshy_green_mug_collision_003.obj" />
+    <mesh name="039_mug_1_part_4" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/decomposed/meshy_green_mug_collision_004.obj" />
+    <mesh name="039_mug_1_part_5" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/decomposed/meshy_green_mug_collision_005.obj" />
+    <mesh name="039_mug_1_part_6" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/decomposed/meshy_green_mug_collision_006.obj" />
+    <mesh name="039_mug_1_part_7" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/decomposed/meshy_green_mug_collision_007.obj" />
+    <mesh name="039_mug_1_part_8" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/decomposed/meshy_green_mug_collision_008.obj" />
+    <mesh name="039_mug_1_part_9" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/decomposed/meshy_green_mug_collision_009.obj" />
+    <mesh name="039_mug_1_part_10" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/decomposed/meshy_green_mug_collision_010.obj" />
+    <mesh name="039_mug_1_part_11" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/decomposed/meshy_green_mug_collision_011.obj" />
+    <mesh name="039_mug_1_part_12" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/decomposed/meshy_green_mug_collision_012.obj" />
+    <mesh name="039_mug_1_part_13" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/decomposed/meshy_green_mug_collision_013.obj" />
+    <mesh name="039_mug_1_part_14" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/decomposed/meshy_green_mug_collision_014.obj" />
+    <mesh name="039_mug_1_part_15" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/decomposed/meshy_green_mug_collision_015.obj" />
+    <mesh name="039_mug_1_part_16" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/decomposed/meshy_green_mug_collision_016.obj" />
+    <mesh name="039_mug_1_part_17" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/decomposed/meshy_green_mug_collision_017.obj" />
+    <mesh name="039_mug_1_part_18" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/decomposed/meshy_green_mug_collision_018.obj" />
+    <mesh name="039_mug_1_part_19" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/decomposed/meshy_green_mug_collision_019.obj" />
+    <mesh name="039_mug_1_part_20" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/decomposed/meshy_green_mug_collision_020.obj" />
+    <mesh name="039_mug_1_part_21" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/decomposed/meshy_green_mug_collision_021.obj" />
+    <mesh name="039_mug_1_part_22" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/decomposed/meshy_green_mug_collision_022.obj" />
+    <mesh name="039_mug_1_part_23" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/decomposed/meshy_green_mug_collision_023.obj" />
+    <mesh name="039_mug_1_part_24" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/decomposed/meshy_green_mug_collision_024.obj" />
+    <mesh name="039_mug_1_part_25" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/decomposed/meshy_green_mug_collision_025.obj" />
+    <mesh name="039_mug_1_part_26" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/decomposed/meshy_green_mug_collision_026.obj" />
+    <mesh name="039_mug_1_part_27" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/decomposed/meshy_green_mug_collision_027.obj" />
+    <mesh name="039_mug_1_part_28" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/decomposed/meshy_green_mug_collision_028.obj" />
+    <mesh name="039_mug_1_part_29" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/decomposed/meshy_green_mug_collision_029.obj" />
+    <mesh name="039_mug_1_part_30" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/decomposed/meshy_green_mug_collision_030.obj" />
+    <mesh name="039_mug_1_part_31" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/decomposed/meshy_green_mug_collision_031.obj" />
+    <mesh name="039_mug_1_part_32" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/decomposed/meshy_green_mug_collision_032.obj" />
+    <mesh name="039_mug_1_part_33" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/decomposed/meshy_green_mug_collision_033.obj" />
+    <mesh name="039_mug_1_part_34" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/decomposed/meshy_green_mug_collision_034.obj" />
+    <mesh name="039_mug_1_part_35" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/decomposed/meshy_green_mug_collision_035.obj" />
+    <mesh name="039_mug_1_part_36" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/decomposed/meshy_green_mug_collision_036.obj" />
+    <mesh name="039_mug_1_part_37" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/decomposed/meshy_green_mug_collision_037.obj" />
+    <mesh name="039_mug_1_part_38" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/decomposed/meshy_green_mug_collision_038.obj" />
+    <mesh name="039_mug_1_part_39" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/decomposed/meshy_green_mug_collision_039.obj" />
+    <mesh name="039_mug_1_part_40" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/decomposed/meshy_green_mug_collision_040.obj" />
+    <mesh name="039_mug_1_part_41" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/decomposed/meshy_green_mug_collision_041.obj" />
+    <mesh name="039_mug_1_part_42" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/decomposed/meshy_green_mug_collision_042.obj" />
+    <mesh name="039_mug_1_part_43" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/decomposed/meshy_green_mug_collision_043.obj" />
+    <mesh name="039_mug_1_part_44" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/decomposed/meshy_green_mug_collision_044.obj" />
+    <mesh name="039_mug_1_part_45" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/decomposed/meshy_green_mug_collision_045.obj" />
+    <mesh name="039_mug_1_part_46" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/decomposed/meshy_green_mug_collision_046.obj" />
+    <mesh name="039_mug_1_part_47" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/decomposed/meshy_green_mug_collision_047.obj" />
+    <mesh name="039_mug_1_part_48" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/decomposed/meshy_green_mug_collision_048.obj" />
+    <mesh name="039_mug_1_part_49" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/decomposed/meshy_green_mug_collision_049.obj" />
+    <mesh name="039_mug_1_part_50" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/decomposed/meshy_green_mug_collision_050.obj" />
+    <mesh name="039_mug_1_part_51" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/decomposed/meshy_green_mug_collision_051.obj" />
+    <mesh name="039_mug_1_part_52" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/decomposed/meshy_green_mug_collision_052.obj" />
+    <mesh name="039_mug_1_part_53" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/decomposed/meshy_green_mug_collision_053.obj" />
+    <mesh name="039_mug_1_part_54" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/decomposed/meshy_green_mug_collision_054.obj" />
+    <mesh name="039_mug_1_part_55" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/decomposed/meshy_green_mug_collision_055.obj" />
+    <mesh name="039_mug_1_part_56" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/decomposed/meshy_green_mug_collision_056.obj" />
+    <mesh name="039_mug_1_part_57" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/decomposed/meshy_green_mug_collision_057.obj" />
+    <mesh name="039_mug_1_part_58" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/decomposed/meshy_green_mug_collision_058.obj" />
+    <mesh name="039_mug_1_part_59" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/decomposed/meshy_green_mug_collision_059.obj" />
+    <mesh name="039_mug_1_part_60" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/decomposed/meshy_green_mug_collision_060.obj" />
+    <mesh name="039_mug_1_part_61" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/decomposed/meshy_green_mug_collision_061.obj" />
+    <mesh name="039_mug_1_part_62" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/decomposed/meshy_green_mug_collision_062.obj" />
+    <mesh name="039_mug_1_part_63" file="/home/yuanfang/codegen/Codegen_Datagen/assets/objects/hang_mug/039_mug/1/measured/decomposed/meshy_green_mug_collision_063.obj" />
+  </asset>
+  <worldbody>
+    <body name="039_mug_1" pos="0.23 -0.3 0" quat="6.12323399574e-17 0 0 1">
+      <geom name="039_mug_1_visual" type="mesh" mesh="039_mug_1_mesh" material="039_mug_1_material" contype="0" conaffinity="0" mass="0" group="2" />
+      <geom name="039_mug_1_geom_0" type="mesh" mesh="039_mug_1_part_0" rgba="0 0 0 0" group="3" />
+      <geom name="039_mug_1_geom_1" type="mesh" mesh="039_mug_1_part_1" rgba="0 0 0 0" group="3" />
+      <geom name="039_mug_1_geom_2" type="mesh" mesh="039_mug_1_part_2" rgba="0 0 0 0" group="3" />
+      <geom name="039_mug_1_geom_3" type="mesh" mesh="039_mug_1_part_3" rgba="0 0 0 0" group="3" />
+      <geom name="039_mug_1_geom_4" type="mesh" mesh="039_mug_1_part_4" rgba="0 0 0 0" group="3" />
+      <geom name="039_mug_1_geom_5" type="mesh" mesh="039_mug_1_part_5" rgba="0 0 0 0" group="3" />
+      <geom name="039_mug_1_geom_6" type="mesh" mesh="039_mug_1_part_6" rgba="0 0 0 0" group="3" />
+      <geom name="039_mug_1_geom_7" type="mesh" mesh="039_mug_1_part_7" rgba="0 0 0 0" group="3" />
+      <geom name="039_mug_1_geom_8" type="mesh" mesh="039_mug_1_part_8" rgba="0 0 0 0" group="3" />
+      <geom name="039_mug_1_geom_9" type="mesh" mesh="039_mug_1_part_9" rgba="0 0 0 0" group="3" />
+      <geom name="039_mug_1_geom_10" type="mesh" mesh="039_mug_1_part_10" rgba="0 0 0 0" group="3" />
+      <geom name="039_mug_1_geom_11" type="mesh" mesh="039_mug_1_part_11" rgba="0 0 0 0" group="3" />
+      <geom name="039_mug_1_geom_12" type="mesh" mesh="039_mug_1_part_12" rgba="0 0 0 0" group="3" />
+      <geom name="039_mug_1_geom_13" type="mesh" mesh="039_mug_1_part_13" rgba="0 0 0 0" group="3" />
+      <geom name="039_mug_1_geom_14" type="mesh" mesh="039_mug_1_part_14" rgba="0 0 0 0" group="3" />
+      <geom name="039_mug_1_geom_15" type="mesh" mesh="039_mug_1_part_15" rgba="0 0 0 0" group="3" />
+      <geom name="039_mug_1_geom_16" type="mesh" mesh="039_mug_1_part_16" rgba="0 0 0 0" group="3" />
+      <geom name="039_mug_1_geom_17" type="mesh" mesh="039_mug_1_part_17" rgba="0 0 0 0" group="3" />
+      <geom name="039_mug_1_geom_18" type="mesh" mesh="039_mug_1_part_18" rgba="0 0 0 0" group="3" />
+      <geom name="039_mug_1_geom_19" type="mesh" mesh="039_mug_1_part_19" rgba="0 0 0 0" group="3" />
+      <geom name="039_mug_1_geom_20" type="mesh" mesh="039_mug_1_part_20" rgba="0 0 0 0" group="3" />
+      <geom name="039_mug_1_geom_21" type="mesh" mesh="039_mug_1_part_21" rgba="0 0 0 0" group="3" />
+      <geom name="039_mug_1_geom_22" type="mesh" mesh="039_mug_1_part_22" rgba="0 0 0 0" group="3" />
+      <geom name="039_mug_1_geom_23" type="mesh" mesh="039_mug_1_part_23" rgba="0 0 0 0" group="3" />
+      <geom name="039_mug_1_geom_24" type="mesh" mesh="039_mug_1_part_24" rgba="0 0 0 0" group="3" />
+      <geom name="039_mug_1_geom_25" type="mesh" mesh="039_mug_1_part_25" rgba="0 0 0 0" group="3" />
+      <geom name="039_mug_1_geom_26" type="mesh" mesh="039_mug_1_part_26" rgba="0 0 0 0" group="3" />
+      <geom name="039_mug_1_geom_27" type="mesh" mesh="039_mug_1_part_27" rgba="0 0 0 0" group="3" />
+      <geom name="039_mug_1_geom_28" type="mesh" mesh="039_mug_1_part_28" rgba="0 0 0 0" group="3" />
+      <geom name="039_mug_1_geom_29" type="mesh" mesh="039_mug_1_part_29" rgba="0 0 0 0" group="3" />
+      <geom name="039_mug_1_geom_30" type="mesh" mesh="039_mug_1_part_30" rgba="0 0 0 0" group="3" />
+      <geom name="039_mug_1_geom_31" type="mesh" mesh="039_mug_1_part_31" rgba="0 0 0 0" group="3" />
+      <geom name="039_mug_1_geom_32" type="mesh" mesh="039_mug_1_part_32" rgba="0 0 0 0" group="3" />
+      <geom name="039_mug_1_geom_33" type="mesh" mesh="039_mug_1_part_33" rgba="0 0 0 0" group="3" />
+      <geom name="039_mug_1_geom_34" type="mesh" mesh="039_mug_1_part_34" rgba="0 0 0 0" group="3" />
+      <geom name="039_mug_1_geom_35" type="mesh" mesh="039_mug_1_part_35" rgba="0 0 0 0" group="3" />
+      <geom name="039_mug_1_geom_36" type="mesh" mesh="039_mug_1_part_36" rgba="0 0 0 0" group="3" />
+      <geom name="039_mug_1_geom_37" type="mesh" mesh="039_mug_1_part_37" rgba="0 0 0 0" group="3" />
+      <geom name="039_mug_1_geom_38" type="mesh" mesh="039_mug_1_part_38" rgba="0 0 0 0" group="3" />
+      <geom name="039_mug_1_geom_39" type="mesh" mesh="039_mug_1_part_39" rgba="0 0 0 0" group="3" />
+      <geom name="039_mug_1_geom_40" type="mesh" mesh="039_mug_1_part_40" rgba="0 0 0 0" group="3" />
+      <geom name="039_mug_1_geom_41" type="mesh" mesh="039_mug_1_part_41" rgba="0 0 0 0" group="3" />
+      <geom name="039_mug_1_geom_42" type="mesh" mesh="039_mug_1_part_42" rgba="0 0 0 0" group="3" />
+      <geom name="039_mug_1_geom_43" type="mesh" mesh="039_mug_1_part_43" rgba="0 0 0 0" group="3" />
+      <geom name="039_mug_1_geom_44" type="mesh" mesh="039_mug_1_part_44" rgba="0 0 0 0" group="3" />
+      <geom name="039_mug_1_geom_45" type="mesh" mesh="039_mug_1_part_45" rgba="0 0 0 0" group="3" />
+      <geom name="039_mug_1_geom_46" type="mesh" mesh="039_mug_1_part_46" rgba="0 0 0 0" group="3" />
+      <geom name="039_mug_1_geom_47" type="mesh" mesh="039_mug_1_part_47" rgba="0 0 0 0" group="3" />
+      <geom name="039_mug_1_geom_48" type="mesh" mesh="039_mug_1_part_48" rgba="0 0 0 0" group="3" />
+      <geom name="039_mug_1_geom_49" type="mesh" mesh="039_mug_1_part_49" rgba="0 0 0 0" group="3" />
+      <geom name="039_mug_1_geom_50" type="mesh" mesh="039_mug_1_part_50" rgba="0 0 0 0" group="3" />
+      <geom name="039_mug_1_geom_51" type="mesh" mesh="039_mug_1_part_51" rgba="0 0 0 0" group="3" />
+      <geom name="039_mug_1_geom_52" type="mesh" mesh="039_mug_1_part_52" rgba="0 0 0 0" group="3" />
+      <geom name="039_mug_1_geom_53" type="mesh" mesh="039_mug_1_part_53" rgba="0 0 0 0" group="3" />
+      <geom name="039_mug_1_geom_54" type="mesh" mesh="039_mug_1_part_54" rgba="0 0 0 0" group="3" />
+      <geom name="039_mug_1_geom_55" type="mesh" mesh="039_mug_1_part_55" rgba="0 0 0 0" group="3" />
+      <geom name="039_mug_1_geom_56" type="mesh" mesh="039_mug_1_part_56" rgba="0 0 0 0" group="3" />
+      <geom name="039_mug_1_geom_57" type="mesh" mesh="039_mug_1_part_57" rgba="0 0 0 0" group="3" />
+      <geom name="039_mug_1_geom_58" type="mesh" mesh="039_mug_1_part_58" rgba="0 0 0 0" group="3" />
+      <geom name="039_mug_1_geom_59" type="mesh" mesh="039_mug_1_part_59" rgba="0 0 0 0" group="3" />
+      <geom name="039_mug_1_geom_60" type="mesh" mesh="039_mug_1_part_60" rgba="0 0 0 0" group="3" />
+      <geom name="039_mug_1_geom_61" type="mesh" mesh="039_mug_1_part_61" rgba="0 0 0 0" group="3" />
+      <geom name="039_mug_1_geom_62" type="mesh" mesh="039_mug_1_part_62" rgba="0 0 0 0" group="3" />
+      <geom name="039_mug_1_geom_63" type="mesh" mesh="039_mug_1_part_63" rgba="0 0 0 0" group="3" />
+    </body>
+  </worldbody>
+</mujoco>

@@ -69,8 +69,43 @@ def resize_like(image: np.ndarray, reference: np.ndarray) -> np.ndarray:
     return cv2.resize(image, (width, height), interpolation=cv2.INTER_LINEAR)
 
 
+def pinhole_remap(intrinsic: rs.intrinsics) -> tuple[np.ndarray, np.ndarray]:
+    """Map undistorted output pixels to raw RealSense color pixels, keeping K.
+
+    Invert the SDK's deprojection equations, including its inverse Brown
+    model's tangential terms evaluated at radially scaled coordinates.
+    See librealsense src/rs.cpp, rs2_deproject_pixel_to_point.
+    """
+    if intrinsic.model not in (
+        rs.distortion.none,
+        rs.distortion.brown_conrady,
+        rs.distortion.inverse_brown_conrady,
+    ):
+        raise ValueError(f"Unsupported color distortion model: {intrinsic.model}")
+    u, v = np.meshgrid(
+        np.arange(intrinsic.width, dtype=np.float64),
+        np.arange(intrinsic.height, dtype=np.float64),
+    )
+    x = (u - intrinsic.ppx) / intrinsic.fx
+    y = (v - intrinsic.ppy) / intrinsic.fy
+    if intrinsic.model != rs.distortion.none:
+        k1, k2, p1, p2, k3 = intrinsic.coeffs
+        r2 = x * x + y * y
+        radial = 1 + r2 * (k1 + r2 * (k2 + r2 * k3))
+        xq, yq = x, y
+        if intrinsic.model == rs.distortion.inverse_brown_conrady:
+            xq, yq = x * radial, y * radial
+        dx = 2 * p1 * xq * yq + p2 * (r2 + 2 * xq * xq)
+        dy = 2 * p2 * xq * yq + p1 * (r2 + 2 * yq * yq)
+        x, y = x * radial + dx, y * radial + dy
+    return (
+        (x * intrinsic.fx + intrinsic.ppx).astype(np.float32),
+        (y * intrinsic.fy + intrinsic.ppy).astype(np.float32),
+    )
+
+
 class RealSenseRgbCameras:
-    """Same-process RGB capture for one or more configured RealSense cameras."""
+    """RGB capture, optionally rectified to pinhole images with unchanged K."""
 
     def __init__(
         self,
@@ -79,12 +114,15 @@ class RealSenseRgbCameras:
         frame_timeout_ms: int = 15000,
         image_size: tuple[int, int] = (W, H),
         fps: int = FPS,
+        undistort: bool = False,
     ):
         self.rs_ids = list(rs_ids)
         self.wrist_rs_id = wrist_rs_id
         self.frame_timeout_ms = frame_timeout_ms
         self.width, self.height = image_size
         self.fps = fps
+        self.undistort = undistort
+        self.remap: dict[str, tuple[np.ndarray, np.ndarray]] = {}
         self.pipes: dict[str, rs.pipeline] = {}
         self.intrinsics: dict[str, np.ndarray] = {}
         self.color_formats: dict[str, rs.format] = {}
@@ -120,6 +158,8 @@ class RealSenseRgbCameras:
                     rs.stream.color
                 ).as_video_stream_profile()
                 intrinsic = stream.get_intrinsics()
+                if self.undistort:
+                    self.remap[rs_id] = pinhole_remap(intrinsic)
                 self.intrinsics[rs_id] = np.array(
                     [
                         [intrinsic.fx, 0.0, intrinsic.ppx],
@@ -147,6 +187,8 @@ class RealSenseRgbCameras:
             color = np.asanyarray(color_frame.get_data())
             if self.color_formats[rs_id] == rs.format.rgb8:
                 color = cv2.cvtColor(color, cv2.COLOR_RGB2BGR)
+            if self.undistort:
+                color = cv2.remap(color, *self.remap[rs_id], cv2.INTER_LINEAR)
             images[rs_id] = color.copy()
         return images
 
@@ -156,3 +198,4 @@ class RealSenseRgbCameras:
         self.pipes.clear()
         self.intrinsics.clear()
         self.color_formats.clear()
+        self.remap.clear()

@@ -288,6 +288,14 @@ def load_wrist_camera_params(
 
     _, wrist_serial = load_camera_serials()
     wrist_params = camera_params[wrist_serial]
+    if (
+        "image_model" not in wrist_params
+        or wrist_params["image_model"] != "realsense_sdk_pinhole"
+    ):
+        raise ValueError(
+            "Wrist pose predates distortion correction. Run "
+            "python calibrator_wrist_direct.py with the board visible first."
+        )
     return wrist_serial, wrist_params["extrinsic"]
 
 
@@ -358,7 +366,7 @@ def _compose_rgb_view(
     real_panel = real_bgr.copy()
     overlay_panel = cv2.addWeighted(sim_bgr, 0.5, real_bgr, 0.5, 0.0)
     _put_text(sim_panel, "MuJoCo wrist_camera", (10, 25), 0.62)
-    real_label = "Intrinsic-warped" if is_warp else "Raw"
+    real_label = "Undistorted + intrinsic-warped" if is_warp else "Undistorted"
     _put_text(real_panel, f"{real_label} D405 ({serial})", (10, 25), 0.62)
     _put_text(overlay_panel, "MuJoCo / D405 50/50 overlay", (10, 25), 0.62)
 
@@ -380,6 +388,7 @@ def test_mujoco_rgb(
     scene_xml: Path = SCENE_XML,
 ) -> None:
     """Overlay the current MuJoCo wrist-camera scene with the real D405."""
+    load_wrist_camera_params()
     model, data = _load_model(scene_xml, joints_deg)
     camera_id = mujoco.mj_name2id(
         model,
@@ -395,6 +404,7 @@ def test_mujoco_rgb(
         [wrist_rs_id],
         wrist_rs_id,
         image_size=(W, H),
+        undistort=True,
     )
     try:
         real_camera.start()

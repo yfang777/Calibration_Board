@@ -127,10 +127,13 @@ def calibrate_wrist_camera(
     if max_reprojection_error_px <= 0.0:
         raise ValueError("max_reprojection_error_px must be positive.")
     serial = camera.wrist_rs_id
+    if not camera.undistort:
+        raise ValueError("Wrist calibration requires undistort=True on the camera.")
     if serial not in camera.intrinsics:
         raise RuntimeError(f"RealSense {serial} is not started.")
 
     intrinsic = camera.intrinsics[serial].copy()
+    # get_rgb() supplies pinhole images with the original K.
     distortion = np.zeros(5, dtype=np.float64)
     board, detector = _make_charuco_detector()
     chessboard_corners = np.asarray(board.getChessboardCorners(), dtype=np.float32)
@@ -257,6 +260,8 @@ def save_wrist_camera_params(
         calibration.serial: {
             "extrinsic": calibration.world_to_camera,
             "intrinsic": calibration.intrinsic,
+            "image_model": "realsense_sdk_pinhole",
+            "distortion": calibration.distortion,
         }
     }
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -271,6 +276,7 @@ def main() -> None:
         [wrist_rs_id],
         wrist_rs_id,
         image_size=(W, H),
+        undistort=True,
     )
     try:
         camera.start()
