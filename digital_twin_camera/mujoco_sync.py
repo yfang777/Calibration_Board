@@ -16,6 +16,7 @@ import cv2
 import mujoco
 import numpy as np
 import pyvista as pv
+import yaml
 
 from digital_twin_camera import utils
 from digital_twin_camera.cameras import (
@@ -40,6 +41,11 @@ ROBOT_XML_DIR = REPO.parent / "Codegen_Datagen/assets/xarm7_gripper"
 ROBOT_W_WRIST_XML = ROBOT_XML_DIR / "xarm7_w_wrist.xml"
 ROBOT_WO_WRIST_XML = ROBOT_XML_DIR / "xarm7_wo_wrist.xml"
 ROBOT = "xarm7_w_wrist.xml"
+ROBOT_ENV_CONFIG = REPO / "robot_env_config.yaml"
+TABLE_TEXTURE_PATH = (
+    REPO.parent / "Codegen_Datagen/assets/materials/table_arrange/wood_e68650.png"
+)
+ROOM_LAYOUT = "table_wall"
 
 # Charuco board parameters (must match calibrator.py)
 BOARD_SIZE = (12, 9)   # (cols, rows) — number of squares
@@ -51,6 +57,14 @@ def select_robot_xml(robot: str = ROBOT) -> Path:
         ROBOT_W_WRIST_XML.name: ROBOT_W_WRIST_XML,
         ROBOT_WO_WRIST_XML.name: ROBOT_WO_WRIST_XML,
     }[robot]
+
+
+def load_room_layout(
+    room_layout: str,
+    config_path: Path = ROBOT_ENV_CONFIG,
+) -> list[dict]:
+    with config_path.open("r", encoding="utf-8") as config_file:
+        return yaml.safe_load(config_file)["room_layouts"][room_layout]
 
 
 # --- camera conversion ---------------------------------------------------
@@ -148,6 +162,7 @@ def write_camera_xml(cam_params: dict) -> None:
 def write_scene_xml(
     include_robot: bool = True,
     robot_xml: Path = ROBOT_W_WRIST_XML,
+    room_layout: str = ROOM_LAYOUT,
 ) -> None:
     MJ_XML_DIR.mkdir(parents=True, exist_ok=True)
     robot_rel = os.path.relpath(robot_xml, MJ_XML_DIR)
@@ -169,15 +184,42 @@ def write_scene_xml(
             )
     sites_str = "\n".join(sites)
 
+    surface_lines = []
+    for geometry in load_room_layout(room_layout):
+        attributes = {
+            key: " ".join(map(str, value)) if isinstance(value, list) else str(value)
+            for key, value in geometry.items()
+            if key != "body"
+        }
+        attribute_text = " ".join(
+            f'{key}="{value}"' for key, value in attributes.items()
+        )
+        if "body" in geometry:
+            surface_lines.extend(
+                (
+                    f'    <body name="{geometry["body"]}">',
+                    f"      <geom {attribute_text}/>",
+                    "    </body>",
+                )
+            )
+        else:
+            surface_lines.append(f"    <geom {attribute_text}/>")
+    surface_xml = "\n".join(surface_lines) + "\n"
+
     robot_include = f'  <include file="{robot_rel}"/>\n' if include_robot else ""
 
     SCENE_XML.write_text(
         '<mujoco model="digital_twin">\n'
         f'{robot_include}'
         f'  <include file="{cam_rel}"/>\n'
+        '  <asset>\n'
+        f'    <texture name="default_table_wood" type="2d" '
+        f'file="{TABLE_TEXTURE_PATH}"/>\n'
+        '    <material name="default_table_wood" texture="default_table_wood" '
+        'texrepeat="1 1" texuniform="false" specular="0.1" shininess="0.15"/>\n'
+        '  </asset>\n'
         '  <worldbody>\n'
-        '    <geom name="floor" type="plane" pos="0 0 -0.005" size="1 1 0.01" '
-        'rgba="0.85 0.85 0.85 1"/>\n'
+        f'{surface_xml}'
         f'{sites_str}\n'
         '  </worldbody>\n'
         '</mujoco>\n'

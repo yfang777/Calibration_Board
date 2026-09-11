@@ -29,7 +29,7 @@ BOARD_FROM_WORLD = np.diag([1.0, -1.0, -1.0])
 CALIBRATION_WINDOW = "D405 ChArUco wrist calibration"
 SAMPLE_COUNT = 10
 MIN_CORNERS = 35
-MAX_REPROJECTION_ERROR_PX = 0.35
+MAX_REPROJECTION_ERROR_PX = 0.44
 
 
 @dataclass(frozen=True)

@@ -11,6 +11,7 @@ from typing import Sequence
 import cv2
 import mujoco
 import numpy as np
+import yaml
 
 from digital_twin_camera import utils
 from digital_twin_camera.cameras import (
@@ -26,6 +27,11 @@ CAM_PARAMS_WRIST_PATH = REPO / "data/calib_params/cam_params_wrist.pkl"
 MJ_XML_DIR = REPO / "assets/mujoco_xml/D405_direct"
 SCENE_XML = MJ_XML_DIR / "scene_hand_direct.xml"
 WRIST_ROBOT_XML = REPO / "assets/robot/xarm7/xarm7_with_wrist_direct.xml"
+ROBOT_ENV_CONFIG = REPO / "robot_env_config.yaml"
+TABLE_TEXTURE_PATH = (
+    REPO.parent / "Codegen_Datagen/assets/materials/table_arrange/wood_e68650.png"
+)
+ROOM_LAYOUT = "table_wall"
 
 # W = 640
 # H = 480
@@ -33,8 +39,8 @@ W = 1280
 H = 720
 WRIST_CAMERA_NAME = "wrist_camera"
 LINK7_BODY_NAME = "link7"
-# ROBOT_JOINTS_DEG = (0., -45.0, 0.0, 30, 0., 75, 0.0)
-ROBOT_JOINTS_DEG = (0., -75.0, 0.0, 10, 0., 60, 0.0)
+ROBOT_JOINTS_DEG = (0., -45.0, 0.0, 30, 0., 75, 0.0)
+# ROBOT_JOINTS_DEG = (0., -75.0, 0.0, 10, 0., 60, 0.0)
 GRIPPER_JOINT_NAMES = (
     "left_driver_joint",
     "left_finger_joint",
@@ -71,6 +77,14 @@ def _find_parent(root: ET.Element, child: ET.Element) -> ET.Element | None:
         if child in list(parent):
             return parent
     return None
+
+
+def load_room_layout(
+    room_layout: str,
+    config_path: Path = ROBOT_ENV_CONFIG,
+) -> list[dict]:
+    with config_path.open("r", encoding="utf-8") as config_file:
+        return yaml.safe_load(config_file)["room_layouts"][room_layout]
 
 
 def _robot_tree_without_wrist_camera(
@@ -116,6 +130,7 @@ def _set_camera_attributes(
 def _new_scene_tree(
     robot_xml: Path,
     scene_xml: Path,
+    room_layout: str,
 ) -> ET.ElementTree:
     root = ET.Element("mujoco", {"model": "wrist_camera_calibration"})
     ET.SubElement(
@@ -129,18 +144,47 @@ def _new_scene_tree(
         "global",
         {"offwidth": str(W), "offheight": str(H)},
     )
-    worldbody = ET.SubElement(root, "worldbody")
+    asset = ET.SubElement(root, "asset")
     ET.SubElement(
-        worldbody,
-        "geom",
+        asset,
+        "texture",
         {
-            "name": "floor",
-            "type": "plane",
-            "pos": "0 0 -0.005",
-            "size": "1 1 0.01",
-            "rgba": "0.85 0.85 0.85 1",
+            "name": "default_table_wood",
+            "type": "2d",
+            "file": str(TABLE_TEXTURE_PATH),
         },
     )
+    ET.SubElement(
+        asset,
+        "material",
+        {
+            "name": "default_table_wood",
+            "texture": "default_table_wood",
+            "texrepeat": "1 1",
+            "texuniform": "false",
+            "specular": "0.1",
+            "shininess": "0.15",
+        },
+    )
+    worldbody = ET.SubElement(root, "worldbody")
+    bodies = {}
+    for geometry in load_room_layout(room_layout):
+        parent = worldbody
+        if "body" in geometry:
+            body_name = geometry["body"]
+            if body_name not in bodies:
+                bodies[body_name] = ET.SubElement(
+                    worldbody,
+                    "body",
+                    {"name": body_name},
+                )
+            parent = bodies[body_name]
+        attributes = {
+            key: " ".join(map(str, value)) if isinstance(value, list) else str(value)
+            for key, value in geometry.items()
+            if key != "body"
+        }
+        ET.SubElement(parent, "geom", attributes)
     columns, rows = BOARD_SIZE
     for row in range(rows):
         for column in range(columns):
@@ -207,6 +251,7 @@ def write_scene_xml(
     *,
     robot_xml: Path = WRIST_ROBOT_XML,
     scene_xml: Path = SCENE_XML,
+    room_layout: str = ROOM_LAYOUT,
 ) -> tuple[Path, np.ndarray]:
     """Attach the calibrated camera to link7 and write the board-world scene."""
     robot_tree = _robot_tree_without_wrist_camera(robot_xml)
@@ -227,7 +272,7 @@ def write_scene_xml(
     ET.indent(robot_tree, space="  ")
     robot_tree.write(robot_xml, encoding="utf-8", xml_declaration=False)
 
-    scene_tree = _new_scene_tree(robot_xml, scene_xml)
+    scene_tree = _new_scene_tree(robot_xml, scene_xml, room_layout)
     scene_xml.parent.mkdir(parents=True, exist_ok=True)
     ET.indent(scene_tree, space="  ")
     scene_tree.write(scene_xml, encoding="utf-8", xml_declaration=False)
