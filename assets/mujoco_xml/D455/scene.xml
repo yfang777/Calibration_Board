@@ -2,7 +2,7 @@
   <include file="../../../../Codegen_Datagen/assets/xarm7_gripper/xarm7_w_wrist.xml"/>
   <include file="camera.xml"/>
   <asset>
-    <texture name="default_table_wood" type="2d" file="/home/yuanfang/codegen/Codegen_Datagen/assets/materials/table_arrange/wood_e68650.png"/>
+    <texture name="default_table_wood" type="2d" file="/home/yuan/codegen/Codegen_Datagen/assets/materials/table_arrange/wood_e68650.png"/>
     <material name="default_table_wood" texture="default_table_wood" texrepeat="1 1" texuniform="false" specular="0.1" shininess="0.15"/>
   </asset>
   <worldbody>
