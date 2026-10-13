@@ -11,6 +11,8 @@ from typing import Sequence
 
 import numpy as np
 
+from .camera_appearance import apply_camera_appearance, load_camera_appearance
+
 
 def _camera_group_main(
     pipe: Connection,
@@ -25,6 +27,8 @@ def _camera_group_main(
     # Import librealsense only in the spawned child. This gives the camera
     # owner a fresh runtime instead of inheriting parent-process USB state.
     import pyrealsense2 as rs
+
+    appearance = load_camera_appearance()
 
     pipelines = {}
     aligners = {}
@@ -56,6 +60,7 @@ def _camera_group_main(
 
             profile = pipeline.start(config)
             pipelines[rs_id] = pipeline
+            apply_camera_appearance(profile, appearance)
             if enable_depth:
                 aligners[rs_id] = rs.align(rs.stream.color)
                 depth_scales[rs_id] = float(

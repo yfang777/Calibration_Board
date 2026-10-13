@@ -15,11 +15,34 @@ This repository contains code for calibrating Extrinsic parameters of RealSense 
 
 ## Installation
 
-Ensure you have Python installed. Install the required dependencies using pip:
+Create the Python 3.12 conda environment from the repository root:
 
 ```bash
-pip install numpy opencv-python pyrealsense2
+conda env create -f env.yaml
+conda activate calibrator
+python -m pip check
+python -m unittest discover -s tests -v
 ```
+
+On this workstation, Miniforge is installed at `/home/yuan/miniforge3`.
+Bash is configured for conda; open a new terminal or run
+`source /home/yuan/miniforge3/etc/profile.d/conda.sh` before activation.
+The environment includes OpenCV ChArUco support, RealSense, MuJoCo,
+PyVista, Open3D, SciPy, and the xArm SDK. Run project commands from the
+repository root.
+
+RealSense Viewer is installed separately at
+`/home/yuan/.local/opt/realsense`, with a launcher on the user PATH:
+
+```bash
+realsense-viewer
+```
+
+This user-local installation uses the official Ubuntu 24.04 RealSense
+packages and does not install system udev rules. D455 IMU access may require
+an administrator to install `librealsense2-udev-rules`; RGB and depth streams
+can be checked separately. Close Viewer before running camera scripts so
+the applications do not compete for camera access.
 
 ## Usage
 

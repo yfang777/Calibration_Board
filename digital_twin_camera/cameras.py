@@ -9,6 +9,8 @@ import numpy as np
 import pyrealsense2 as rs
 import yaml
 
+from .camera_appearance import apply_camera_appearance, load_camera_appearance
+
 
 REPO = Path(__file__).resolve().parent.parent
 CONFIG_PATH = REPO / "config.yaml"
@@ -134,6 +136,7 @@ class RealSenseRgbCameras:
 
     def start(self) -> RealSenseRgbCameras:
         assert_realsense_connected(self.rs_ids)
+        appearance = load_camera_appearance()
 
         try:
             for rs_id in self.rs_ids:
@@ -154,6 +157,7 @@ class RealSenseRgbCameras:
                 )
                 profile = pipe.start(config)
                 self.pipes[rs_id] = pipe
+                apply_camera_appearance(profile, appearance)
                 stream = profile.get_stream(
                     rs.stream.color
                 ).as_video_stream_profile()

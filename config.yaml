@@ -1,3 +1,23 @@
+camera_appearance:
+  # Runtime override for this setup; the code default is auto.
+  mode: align
+  align:
+    # Initial fixed baseline, not a measured color-target calibration.
+    # D455 RGB uses 100-us SDK units; D405 uses microseconds.
+    exposure_us: 16600
+    # Gain scales differ between models; retain each sensor's baseline gain.
+    gain:
+      d455: 64
+      d405: 16
+    shared:
+      white_balance: 4600
+      brightness: 0
+      contrast: 50
+      saturation: 64
+      gamma: 300
+      sharpness: 50
+      power_line_frequency: 3  # Automatic flicker-frequency selection.
+
 rs_id:
   d455:
     cam_1: 239222303153
