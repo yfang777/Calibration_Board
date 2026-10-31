@@ -37,13 +37,13 @@ D455_XML_DIR = REPO / "assets/mujoco_xml/D455"
 MJ_XML_DIR = D455_XML_DIR
 CAMERA_XML = MJ_XML_DIR / "camera.xml"
 SCENE_XML = MJ_XML_DIR / "scene.xml"
-ROBOT_XML_DIR = REPO.parent / "Codegen_Datagen/assets/xarm7_gripper"
+ROBOT_XML_DIR = REPO / "assets/robot/xarm7_gripper"
 ROBOT_W_WRIST_XML = ROBOT_XML_DIR / "xarm7_w_wrist.xml"
 ROBOT_WO_WRIST_XML = ROBOT_XML_DIR / "xarm7_wo_wrist.xml"
 ROBOT = "xarm7_w_wrist.xml"
 ROBOT_ENV_CONFIG = REPO / "robot_env_config.yaml"
 TABLE_TEXTURE_PATH = (
-    REPO.parent / "Codegen_Datagen/assets/materials/table_arrange/wood_e68650.png"
+    REPO / "assets/materials/table_arrange/wood_e68650.png"
 )
 ROOM_LAYOUT = "table_wall"
 
@@ -359,6 +359,7 @@ def test_mujoco_rgb(
     robot_xml = select_robot_xml(robot)
     write_scene_xml(include_robot=include_robot, robot_xml=robot_xml)
     print(f"Using robot model: {robot_xml.name}")
+    print(f"Saving into camera XML: {CAMERA_XML}")
 
     model = mujoco.MjModel.from_xml_path(str(SCENE_XML))
     data = mujoco.MjData(model)

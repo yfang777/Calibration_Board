@@ -1,0 +1,1 @@
+rs-enumerate-devices -s

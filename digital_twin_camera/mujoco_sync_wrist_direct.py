@@ -29,7 +29,7 @@ SCENE_XML = MJ_XML_DIR / "scene_hand_direct.xml"
 WRIST_ROBOT_XML = REPO / "assets/robot/xarm7/xarm7_with_wrist_direct.xml"
 ROBOT_ENV_CONFIG = REPO / "robot_env_config.yaml"
 TABLE_TEXTURE_PATH = (
-    REPO.parent / "Codegen_Datagen/assets/materials/table_arrange/wood_e68650.png"
+    REPO / "assets/materials/table_arrange/wood_e68650.png"
 )
 ROOM_LAYOUT = "table_wall"
 
